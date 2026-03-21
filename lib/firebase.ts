@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-
+import { getAuth } from "firebase/auth";
 // Ab keys direct nahi hain, secure .env file se aa rahi hain!
 const firebaseConfig = {
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -16,5 +16,5 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Database (Firestore) ko active karo
 const db = getFirestore(app);
-
+export const auth = getAuth(app);
 export { db };
