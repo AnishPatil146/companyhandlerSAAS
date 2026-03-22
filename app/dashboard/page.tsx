@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   LayoutDashboard, BarChart3, Bot, Settings, LogOut,
   Plus, User as UserIcon, Loader2, Trash2, Calendar, Users, Copy, CheckCircle2, Mail, Package, TrendingUp, Tag, Sparkles,
-  X, DollarSign, ShieldCheck, Download, Binary, Wrench, Handshake, AlertCircle, ChevronRight, UploadCloud
+  X, DollarSign, ShieldCheck, Download, Binary, Wrench, Handshake, AlertCircle, ChevronRight, UploadCloud, Menu, Trophy
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -24,12 +24,13 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 
 // 📝 Interfaces
-interface Lead { id: string; name: string; company: string; status: string; value: number; createdAt?: any; }
+interface Lead { id: string; name: string; company: string; status: string; value: number; assignedToId?: string; assignedToName?: string; createdAt?: any; }
 interface MonthlyData { month: string; revenue: number; churn: number; target: number; }
-interface TeamMember { id: string; name: string; email: string; role: string; addedByRole: string; status: string; createdAt?: any; }
+interface TeamMember { id: string; uid?: string; name: string; email: string; role: string; addedByRole: string; status: string; createdAt?: any; }
 interface UserData { name: string; role: string; uid?: string; email?: string; }
 interface Product { id: string; name: string; category: string; price: number; marketPrice: number; marketShare: number; stock: number; isTrending: boolean; createdAt?: any; }
 interface MarketData { name: string; share: number; price: number; }
+interface EmployeeStats { name: string; role: string; totalLeads: number; wonLeads: number; revenue: number; winRate: number; } // 🔥 NEW
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -63,6 +64,9 @@ export default function MasterDashboard() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState('Products');
 
+  // 🔥 Mobile Menu State 🔥
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   const [userRole, setUserRole] = useState('');
   const [currentUserData, setCurrentUserData] = useState<UserData | null>(null);
 
@@ -76,7 +80,7 @@ export default function MasterDashboard() {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [isExporting, setIsExporting] = useState(false); // 🔥 NAYA STATE PDF KE LIYE
+  const [isExporting, setIsExporting] = useState(false);
 
   const [isImportingAI, setIsImportingAI] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -92,7 +96,8 @@ export default function MasterDashboard() {
 
   const [createdAccount, setCreatedAccount] = useState<{ name: string, email: string, password: string } | null>(null);
 
-  const [newLead, setNewLead] = useState({ name: '', company: '', value: '' });
+  // 🔥 NEW: State mein assignedToId aur assignedToName add kiya
+  const [newLead, setNewLead] = useState({ name: '', company: '', value: '', assignedToId: '', assignedToName: '' });
   const [newMember, setNewMember] = useState({ name: '', email: '', role: 'Employee' });
   const [newProduct, setNewProduct] = useState({ name: '', category: 'Software', price: '', marketPrice: '', marketShare: '', stock: '', isTrending: false });
 
@@ -104,8 +109,12 @@ export default function MasterDashboard() {
         unsubscribeUser = onSnapshot(q, (snapshot) => {
           if (!snapshot.empty) {
             const userData = snapshot.docs[0].data() as UserData;
-            setCurrentUserData(userData); setUserRole(userData.role);
-          } else { setCurrentUserData({ name: 'Super Admin', role: 'CEO' }); setUserRole('CEO'); }
+            setCurrentUserData({ ...userData, uid: user.uid }); // 🔥 NEW: Track current user UID
+            setUserRole(userData.role);
+          } else {
+            setCurrentUserData({ name: 'Super Admin', role: 'CEO', uid: user.uid }); // 🔥 NEW: Track Super Admin UID
+            setUserRole('CEO');
+          }
           setIsAuthChecking(false);
         });
       }
@@ -120,6 +129,14 @@ export default function MasterDashboard() {
     const unsubscribeProducts = onSnapshot(query(collection(db, 'products'), orderBy('createdAt', 'desc')), (snapshot) => { setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Product[]); });
     return () => { unsubscribeLeads(); unsubscribeTeam(); unsubscribeProducts(); };
   }, [isAuthChecking]);
+
+  // 🔥 NEW: ROLE-BASED LEAD FILTERING 🔥
+  const visibleLeads = useMemo(() => {
+    if (userRole === 'Employee') {
+      return leads.filter(l => l.assignedToId === currentUserData?.uid);
+    }
+    return leads; // CEO & Managers dekhenge saari leads
+  }, [leads, userRole, currentUserData]);
 
   const analytics = useMemo(() => {
     const now = new Date(); const cutoffDate = new Date();
@@ -137,6 +154,9 @@ export default function MasterDashboard() {
     let totalGross = 0; let expectedRev = 0; let wonRev = 0;
     const counts = { 'New': 0, 'In Progress': 0, 'Won': 0, 'Lost': 0 };
 
+    // 🔥 NEW: Employee Performance Tracker Map
+    const empPerformance: Record<string, EmployeeStats> = {};
+
     validLeads.forEach(lead => {
       const val = Number(lead.value) || 0; totalGross += val;
       if (counts[lead.status as keyof typeof counts] !== undefined) counts[lead.status as keyof typeof counts]++; else counts['New']++;
@@ -146,7 +166,29 @@ export default function MasterDashboard() {
         const monthName = months[lead.createdAt.toDate().getMonth()];
         if (lead.status === 'Won') dataMap[monthName].revenue += val; else if (lead.status === 'Lost') dataMap[monthName].churn += val;
       }
+
+      // 🔥 NEW: Track Employee Level Analytics
+      const empId = lead.assignedToId || 'unassigned';
+      if (!empPerformance[empId]) {
+        empPerformance[empId] = { name: lead.assignedToName || 'Unassigned', role: 'Team', totalLeads: 0, wonLeads: 0, revenue: 0, winRate: 0 };
+      }
+      empPerformance[empId].totalLeads += 1;
+      if (lead.status === 'Won') {
+        empPerformance[empId].wonLeads += 1;
+        empPerformance[empId].revenue += val;
+      }
     });
+
+    // Calculate Win Rate
+    Object.values(empPerformance).forEach(emp => {
+      emp.winRate = emp.totalLeads > 0 ? Math.round((emp.wonLeads / emp.totalLeads) * 100) : 0;
+    });
+
+    // Generate Top Performers Leaderboard
+    const leaderboard = Object.values(empPerformance)
+      .filter(e => e.name !== 'Unassigned')
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
 
     const totalClosed = counts.Won + counts.Lost;
     const winRate = totalClosed > 0 ? ((counts.Won / totalClosed) * 100).toFixed(1) : "0.0";
@@ -171,7 +213,8 @@ export default function MasterDashboard() {
     return {
       totalGross, expectedRev, wonRev, winRate, avgDealSize, activeCount: counts.New + counts['In Progress'],
       graphData: Object.values(dataMap).slice(0, 6), pieData,
-      totalInventoryValue, productMarketData: productMarketData.slice(0, 5)
+      totalInventoryValue, productMarketData: productMarketData.slice(0, 5),
+      leaderboard // 🔥 NEW EXPORT
     };
   }, [leads, timeRange, products]);
 
@@ -373,43 +416,64 @@ export default function MasterDashboard() {
     }
   };
 
-  // 🔥 NEW: High-End PDF Export Logic (Fixed for Modern CSS) 🔥
   const handleExportPDF = async () => {
     if (!aiResult) return;
     setIsExporting(true);
     try {
-      // Use modern html-to-image instead of html2canvas
       const { toPng } = await import('html-to-image');
       const jsPDF = (await import('jspdf')).default;
 
       const element = document.getElementById('pdf-report-container');
       if (!element) throw new Error("Report container not found.");
 
-      // Generate High-Quality Image
-      const dataUrl = await toPng(element, { 
+      const dataUrl = await toPng(element, {
         backgroundColor: '#0c0c0c',
-        pixelRatio: 2 // High Resolution
+        pixelRatio: 2
       });
 
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      
-      // Aspect Ratio calculation
       const pdfHeight = (element.offsetHeight * pdfWidth) / element.offsetWidth;
 
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(`${aiResult.bizName.replace(/\s+/g, '_')}_Executive_Report.pdf`);
-    } catch (error) {
-      alert("❌ Error generating PDF: " + (error as Error).message);
+    } catch (error: any) {
+      console.warn("Canvas Error:", error.message);
+      alert("Modern CSS/Extension blocked the canvas. Opening secure print dialog... Save it as PDF.");
+
+      const printContent = document.getElementById('pdf-report-container')?.innerHTML;
+      const originalContent = document.body.innerHTML;
+
+      if (printContent) {
+        document.body.innerHTML = `<div style="background: #0c0c0c; color: white; padding: 20px;">${printContent}</div>`;
+        window.print();
+        document.body.innerHTML = originalContent;
+        window.location.reload();
+      }
     } finally {
       setIsExporting(false);
     }
   };
 
+  // 🔥 NEW: Save lead with assigned Employee 🔥
   const handleAddLead = async (e: React.FormEvent) => {
     e.preventDefault(); if (!newLead.name || !newLead.company || !newLead.value) return;
     setIsSaving(true);
-    try { await addDoc(collection(db, 'leads'), { name: newLead.name, company: newLead.company, status: 'New', value: Number(newLead.value), createdAt: serverTimestamp() }); setIsModalOpen(false); setNewLead({ name: '', company: '', value: '' }); } finally { setIsSaving(false); }
+    try {
+      await addDoc(collection(db, 'leads'), {
+        name: newLead.name,
+        company: newLead.company,
+        status: 'New',
+        value: Number(newLead.value),
+        assignedToId: newLead.assignedToId || currentUserData?.uid || '', // Auto-assign to self if empty
+        assignedToName: newLead.assignedToName || currentUserData?.name || 'Unassigned',
+        createdAt: serverTimestamp()
+      });
+      setIsModalOpen(false);
+      setNewLead({ name: '', company: '', value: '', assignedToId: '', assignedToName: '' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleAddMember = async (e: React.FormEvent) => {
@@ -449,11 +513,23 @@ export default function MasterDashboard() {
   if (isAuthChecking) return <div className="flex h-screen items-center justify-center bg-[#0a0a0a] text-zinc-400"><Loader2 className="animate-spin mr-3" size={20} /> Verifying Secure Connection...</div>;
 
   return (
-    <div className="flex h-screen w-full bg-[#0a0a0a] text-zinc-100 font-sans selection:bg-zinc-800">
+    <div className="flex h-screen w-full bg-[#0a0a0a] text-zinc-100 font-sans selection:bg-zinc-800 overflow-hidden relative">
 
-      <aside className="w-64 border-r border-zinc-800/60 bg-[#0a0a0a] flex flex-col justify-between">
+      {/* 🔥 Mobile Sidebar Overlay 🔥 */}
+      {isMobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/80 z-40 md:hidden backdrop-blur-sm"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* 🔥 Responsive Sidebar 🔥 */}
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 border-r border-zinc-800/60 bg-[#0a0a0a] flex flex-col justify-between transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div>
-          <div className="h-16 flex items-center px-6 border-b border-zinc-800/60 font-semibold tracking-widest text-zinc-100 uppercase text-sm">Company Handler</div>
+          <div className="h-16 flex items-center justify-between px-6 border-b border-zinc-800/60 font-semibold tracking-widest text-zinc-100 uppercase text-sm">
+            Company Handler
+            <button className="md:hidden text-zinc-400" onClick={() => setIsMobileMenuOpen(false)}><X size={20} /></button>
+          </div>
           <nav className="p-4 space-y-1">
             {[
               { id: 'Dashboard', icon: <LayoutDashboard size={18} /> },
@@ -465,7 +541,11 @@ export default function MasterDashboard() {
             ].map((tab) => {
               if (tab.id === 'Team' && userRole === 'Employee') return null;
               return (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-zinc-800/80 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'}`}>
+                <button
+                  key={tab.id}
+                  onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-zinc-800/80 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'}`}
+                >
                   {tab.icon} {tab.id}
                 </button>
               )
@@ -479,8 +559,23 @@ export default function MasterDashboard() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a]">
-        <header className="h-16 border-b border-zinc-800/60 flex items-center justify-between px-8 bg-[#0a0a0a]">
+      <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] h-full overflow-hidden">
+
+        {/* 🔥 Mobile Header 🔥 */}
+        <header className="md:hidden flex h-16 border-b border-zinc-800/60 items-center justify-between px-4 bg-[#0a0a0a] shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsMobileMenuOpen(true)} className="text-zinc-400 hover:text-white p-1">
+              <Menu size={24} />
+            </button>
+            <span className="font-semibold text-zinc-100 text-sm">{activeTab}</span>
+          </div>
+          <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700">
+            <UserIcon size={14} className="text-zinc-300" />
+          </div>
+        </header>
+
+        {/* 🔥 Desktop Header 🔥 */}
+        <header className="hidden md:flex h-16 border-b border-zinc-800/60 items-center justify-between px-8 bg-[#0a0a0a] shrink-0">
           <div className="flex items-center gap-2 text-sm text-zinc-500"><span>Overview</span><span>/</span><span className="text-zinc-100 font-medium">{activeTab}</span></div>
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-3">
@@ -490,37 +585,37 @@ export default function MasterDashboard() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-7xl mx-auto">
 
             {/* 🔥 PRODUCTS TAB 🔥 */}
             {activeTab === 'Products' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-                <div className="flex justify-between items-end mb-8">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
                   <div>
                     <h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Marketplace & Inventory</h1>
                     <p className="text-sm text-zinc-500 mt-1">Manage company products, pricing, and active trends.</p>
                   </div>
 
                   {userRole !== 'Employee' && (
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <input type="file" accept=".xlsx, .xls" className="hidden" ref={fileInputRef} onChange={handleExcelUpload} />
                       <button
                         onClick={() => setShowAIModal(true)}
-                        className="bg-zinc-800 text-emerald-400 border border-zinc-700 hover:bg-zinc-700 px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm transition-colors"
+                        className="flex-1 md:flex-none justify-center bg-zinc-800 text-emerald-400 border border-zinc-700 hover:bg-zinc-700 px-4 py-2.5 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm transition-colors"
                       >
                         <Sparkles size={16} />
-                        Smart Import (Excel)
+                        Smart Import
                       </button>
 
-                      <button onClick={() => setIsProductModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm">
+                      <button onClick={() => setIsProductModalOpen(true)} className="flex-1 md:flex-none justify-center bg-white text-black hover:bg-zinc-200 px-4 py-2.5 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm">
                         <Plus size={16} /> Add Product
                       </button>
                     </div>
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {products.length === 0 ? (
                     <div className="col-span-full p-12 text-center text-zinc-500 bg-[#111111] border border-zinc-800/60 rounded-xl">No products in marketplace yet. Click &quot;Smart Import&quot; to add via Excel!</div>
                   ) : (
@@ -576,9 +671,9 @@ export default function MasterDashboard() {
                           </p>
 
                           {userRole !== 'Employee' && (
-                            <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="flex items-center gap-3 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                               <button onClick={() => handleTrendingToggle(product.id, product.isTrending)} className="text-xs text-zinc-400 hover:text-orange-400 font-medium">
-                                {product.isTrending ? 'Unmark Fire' : 'Mark Trending'}
+                                {product.isTrending ? 'Unmark' : 'Mark Fire'}
                               </button>
                               <button onClick={() => handleDeleteDoc('products', product.id)} className="text-zinc-500 hover:text-red-500"><Trash2 size={16} /></button>
                             </div>
@@ -594,110 +689,175 @@ export default function MasterDashboard() {
             {/* TEAM TAB */}
             {activeTab === 'Team' && userRole !== 'Employee' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-                <div className="flex justify-between items-end mb-8">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
                   <div><h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Organization Directory</h1><p className="text-sm text-zinc-500 mt-1">Manage access control and auto-generate accounts.</p></div>
-                  <button onClick={() => setIsTeamModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm"><Plus size={16} /> Add Member</button>
+                  <button onClick={() => setIsTeamModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2.5 rounded-md text-sm font-medium flex items-center justify-center gap-2 shadow-sm w-full md:w-auto"><Plus size={16} /> Add Member</button>
                 </div>
+
+                {/* 🔥 Swipeable Table Wrapper 🔥 */}
                 <div className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden mt-8 shadow-sm">
-                  <table className="w-full text-left text-sm">
-                    <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Name</th><th className="p-4 text-zinc-400 font-medium">Email Address</th><th className="p-4 text-zinc-400 font-medium">Role</th><th className="p-4 text-zinc-400 font-medium">Status</th><th className="p-4 text-zinc-400 font-medium text-center w-16">Action</th></tr></thead>
-                    <tbody>
-                      {visibleTeam.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-zinc-500">No members visible to your role.</td></tr> :
-                        visibleTeam.map(member => (
-                          <tr key={member.id} className="border-b border-zinc-800/30 hover:bg-[#161616] group transition-colors">
-                            <td className="p-4 font-medium text-zinc-200">{member.name}</td><td className="p-4 text-zinc-500">{member.email}</td>
-                            <td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold border ${member.role === 'Manager' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : ''} ${member.role === 'HR' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : ''} ${member.role === 'Employee' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : ''}`}>{member.role}</span></td>
-                            <td className="p-4"><span className="flex items-center gap-1 text-emerald-400 text-xs font-medium"><CheckCircle2 size={12} /> {member.status}</span></td>
-                            <td className="p-4 text-center">{(userRole === 'CEO' || (userRole !== 'CEO' && member.role === 'Employee')) && (<button onClick={() => handleDeleteDoc('company_team', member.id)} className="text-zinc-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1"><Trash2 size={16} /></button>)}</td>
-                          </tr>
-                        ))
-                      }
-                    </tbody>
-                  </table>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Name</th><th className="p-4 text-zinc-400 font-medium">Email Address</th><th className="p-4 text-zinc-400 font-medium">Role</th><th className="p-4 text-zinc-400 font-medium">Status</th><th className="p-4 text-zinc-400 font-medium text-center w-16">Action</th></tr></thead>
+                      <tbody>
+                        {visibleTeam.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-zinc-500">No members visible to your role.</td></tr> :
+                          visibleTeam.map(member => (
+                            <tr key={member.id} className="border-b border-zinc-800/30 hover:bg-[#161616] group transition-colors">
+                              <td className="p-4 font-medium text-zinc-200">{member.name}</td><td className="p-4 text-zinc-500">{member.email}</td>
+                              <td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold border ${member.role === 'Manager' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : ''} ${member.role === 'HR' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : ''} ${member.role === 'Employee' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : ''}`}>{member.role}</span></td>
+                              <td className="p-4"><span className="flex items-center gap-1 text-emerald-400 text-xs font-medium"><CheckCircle2 size={12} /> {member.status}</span></td>
+                              <td className="p-4 text-center">{(userRole === 'CEO' || (userRole !== 'CEO' && member.role === 'Employee')) && (<button onClick={() => handleDeleteDoc('company_team', member.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1"><Trash2 size={16} /></button>)}</td>
+                            </tr>
+                          ))
+                        }
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </motion.div>
             )}
 
-            {/* DASHBOARD TAB */}
+            {/* 🔥 DASHBOARD TAB (UPDATED WITH VISIBLE LEADS) 🔥 */}
             {activeTab === 'Dashboard' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-                <div className="flex justify-between items-end mb-8">
-                  <div><h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Active Pipeline</h1><p className="text-sm text-emerald-500 mt-1 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Secure Cloud Sync Active</p></div>
-                  <button onClick={() => setIsModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm"><Plus size={16} /> Deploy Lead</button>
+                <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
+                  <div>
+                    <h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Active Pipeline</h1>
+                    <p className="text-sm text-emerald-500 mt-1 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> {userRole === 'Employee' ? 'Your Assigned Leads' : 'Company Wide Leads'}</p>
+                  </div>
+                  <button onClick={() => setIsModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2.5 rounded-md text-sm font-medium flex items-center justify-center gap-2 shadow-sm w-full md:w-auto"><Plus size={16} /> Deploy Lead</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60 shadow-sm"><p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Total Gross Pipeline</p><h2 className="text-3xl font-semibold text-zinc-100">${analytics.totalGross.toLocaleString()}</h2></div>
                   <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60 shadow-sm"><p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Total Won Revenue</p><h2 className="text-3xl font-semibold text-emerald-400">${analytics.wonRev.toLocaleString()}</h2></div>
                   <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60 shadow-sm"><p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Total Active Leads</p><h2 className="text-3xl font-semibold text-zinc-100">{analytics.activeCount}</h2></div>
                 </div>
+
                 <div className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden mt-8 shadow-sm">
-                  <table className="w-full text-left text-sm">
-                    <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Name</th><th className="p-4 text-zinc-400 font-medium">Organization</th><th className="p-4 text-zinc-400 font-medium">Status</th><th className="p-4 text-zinc-400 font-medium text-right">Value</th><th className="p-4 text-zinc-400 font-medium text-center w-16">Action</th></tr></thead>
-                    <tbody>
-                      {isLoadingData ? <tr><td colSpan={5} className="p-8 text-center text-zinc-500"><Loader2 className="animate-spin inline-block mr-2" size={16} /> Fetching...</td></tr> :
-                        leads.map(l => (
-                          <tr key={l.id} className="border-b border-zinc-800/30 hover:bg-[#161616] group transition-colors">
-                            <td className="p-4 font-medium text-zinc-200">{l.name}</td><td className="p-4 text-zinc-500">{l.company}</td>
-                            <td className="p-4"><select value={l.status} onChange={(e) => handleStatusChange(l.id, e.target.value)} className={`bg-zinc-800/50 text-zinc-300 px-2 py-1.5 rounded text-xs font-medium border border-zinc-700/50 outline-none cursor-pointer hover:bg-zinc-700 transition-colors ${l.status === 'Won' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : ''} ${l.status === 'Lost' ? 'text-red-400 border-red-500/30 bg-red-500/10' : ''}`}><option value="New" className="bg-zinc-900 text-white">New</option><option value="In Progress" className="bg-zinc-900 text-white">In Progress</option><option value="Won" className="bg-zinc-900 text-emerald-400">Won</option><option value="Lost" className="bg-zinc-900 text-red-400">Lost</option></select></td>
-                            <td className="p-4 text-right text-zinc-300">${(l.value || 0).toLocaleString()}</td>
-                            <td className="p-4 text-center"><button onClick={() => handleDeleteDoc('leads', l.id)} className="text-zinc-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 p-1"><Trash2 size={16} /></button></td>
-                          </tr>
-                        ))
-                      }
-                    </tbody>
-                  </table>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead>
+                        <tr className="border-b border-zinc-800/60 bg-[#161616]">
+                          <th className="p-4 text-zinc-400 font-medium">Name</th>
+                          <th className="p-4 text-zinc-400 font-medium">Organization</th>
+                          <th className="p-4 text-zinc-400 font-medium">Assigned To</th>
+                          <th className="p-4 text-zinc-400 font-medium">Status</th>
+                          <th className="p-4 text-zinc-400 font-medium text-right">Value</th>
+                          <th className="p-4 text-zinc-400 font-medium text-center w-16">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {isLoadingData ? <tr><td colSpan={6} className="p-8 text-center text-zinc-500"><Loader2 className="animate-spin inline-block mr-2" size={16} /> Fetching...</td></tr> :
+                          visibleLeads.length === 0 ? <tr><td colSpan={6} className="p-8 text-center text-zinc-500">No leads found in pipeline.</td></tr> :
+                            visibleLeads.map(l => (
+                              <tr key={l.id} className="border-b border-zinc-800/30 hover:bg-[#161616] group transition-colors">
+                                <td className="p-4 font-medium text-zinc-200">{l.name}</td>
+                                <td className="p-4 text-zinc-500">{l.company}</td>
+                                <td className="p-4 text-zinc-400 flex items-center gap-2"><UserIcon size={12} /> {l.assignedToName || 'Unassigned'}</td>
+                                <td className="p-4"><select value={l.status} onChange={(e) => handleStatusChange(l.id, e.target.value)} className={`bg-zinc-800/50 text-zinc-300 px-2 py-1.5 rounded text-xs font-medium border border-zinc-700/50 outline-none cursor-pointer hover:bg-zinc-700 transition-colors ${l.status === 'Won' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : ''} ${l.status === 'Lost' ? 'text-red-400 border-red-500/30 bg-red-500/10' : ''}`}><option value="New" className="bg-zinc-900 text-white">New</option><option value="In Progress" className="bg-zinc-900 text-white">In Progress</option><option value="Won" className="bg-zinc-900 text-emerald-400">Won</option><option value="Lost" className="bg-zinc-900 text-red-400">Lost</option></select></td>
+                                <td className="p-4 text-right text-zinc-300">${(l.value || 0).toLocaleString()}</td>
+                                <td className="p-4 text-center"><button onClick={() => handleDeleteDoc('leads', l.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1"><Trash2 size={16} /></button></td>
+                              </tr>
+                            ))
+                        }
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </motion.div>
             )}
 
-            {/* 🔥 UPDATED ANALYTICS TAB 🔥 */}
+            {/* 🔥 UPDATED ANALYTICS TAB WITH LEADERBOARD & PRODUCT CHARTS 🔥 */}
             {activeTab === 'Analytics' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-                <div className="flex justify-between items-end mb-6">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-6">
                   <h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Executive Telemetry & Intelligence</h1>
-                  <div className="flex items-center gap-3 bg-[#111111] border border-zinc-800/60 px-4 py-2 rounded-lg shadow-sm">
-                    <Calendar size={16} className="text-zinc-400" />
-                    <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="bg-transparent text-sm font-medium text-zinc-200 outline-none cursor-pointer">
+                  <div className="flex items-center gap-3 bg-[#111111] border border-zinc-800/60 px-4 py-2.5 rounded-lg shadow-sm w-full md:w-auto">
+                    <Calendar size={16} className="text-zinc-400 shrink-0" />
+                    <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="bg-transparent text-sm font-medium text-zinc-200 outline-none cursor-pointer w-full">
                       <option value="all" className="bg-zinc-900">All Time</option><option value="1y" className="bg-zinc-900">Last 1 Year</option><option value="30d" className="bg-zinc-900">Last 30 Days</option><option value="7d" className="bg-zinc-900">Last 7 Days</option>
                     </select>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Avg Deal Size</p><h2 className="text-2xl font-semibold text-zinc-100">${Number(analytics.avgDealSize).toLocaleString()}</h2></div>
-                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Expected Revenue</p><h2 className="text-2xl font-semibold text-yellow-500">${analytics.expectedRev.toLocaleString()}</h2></div>
-                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Total Closed Won</p><h2 className="text-2xl font-semibold text-emerald-400">${analytics.wonRev.toLocaleString()}</h2></div>
-                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Win Rate</p><h2 className="text-2xl font-semibold text-zinc-100">{analytics.winRate}%</h2></div>
+                {/* 🔥 RESTORED 5 CARDS (Including Inventory Value) 🔥 */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-6">
+                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Avg Deal Size</p><h2 className="text-xl md:text-2xl font-semibold text-zinc-100">${Number(analytics.avgDealSize).toLocaleString()}</h2></div>
+                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Expected Rev</p><h2 className="text-xl md:text-2xl font-semibold text-yellow-500">${analytics.expectedRev.toLocaleString()}</h2></div>
+                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Closed Won</p><h2 className="text-xl md:text-2xl font-semibold text-emerald-400">${analytics.wonRev.toLocaleString()}</h2></div>
+                  <div className="bg-[#111111] p-5 rounded-xl border border-zinc-800/60"><p className="text-zinc-500 text-xs font-medium uppercase mb-1">Win Rate</p><h2 className="text-xl md:text-2xl font-semibold text-zinc-100">{analytics.winRate}%</h2></div>
 
-                  <div className="bg-[#111111] p-5 rounded-xl border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)] relative overflow-hidden">
+                  {/* 🔥 THE MISSING GLOWING INVENTORY CARD 🔥 */}
+                  <div className="col-span-2 sm:col-span-3 md:col-span-1 bg-[#111111] p-5 rounded-xl border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)] relative overflow-hidden">
                     <div className="absolute -right-4 -top-4 opacity-10 text-emerald-500"><Package size={80} /></div>
-                    <p className="text-emerald-500 text-xs font-medium uppercase mb-1">Total Inventory Value</p>
+                    <p className="text-emerald-500 text-xs font-medium uppercase mb-1">Inventory Value</p>
                     <h2 className="text-2xl font-semibold text-emerald-400">${analytics.totalInventoryValue.toLocaleString()}</h2>
                   </div>
                 </div>
 
+                {/* 🔥 EMPLOYEE LEADERBOARD (Only visible to Management) 🔥 */}
+                {userRole !== 'Employee' && (
+                <div className="bg-[#111111] border border-emerald-500/20 rounded-xl overflow-hidden shadow-sm relative mb-6">
+                  <div className="absolute top-0 right-0 p-8 opacity-5"><Trophy size={100} className="text-emerald-500" /></div>
+                  <div className="p-6 border-b border-zinc-800/60 relative z-10 flex items-center gap-3">
+                    <Trophy className="text-emerald-400" size={24} />
+                    <h3 className="text-lg font-bold text-white tracking-tight">Top Performing Employees</h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap relative z-10">
+                      <thead>
+                        <tr className="bg-[#161616] text-zinc-400">
+                          <th className="p-4 font-medium">Rank & Name</th>
+                          <th className="p-4 font-medium text-center">Total Leads</th>
+                          <th className="p-4 font-medium text-center">Conversion (Win Rate)</th>
+                          <th className="p-4 font-medium text-right text-emerald-400">Revenue Won</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.leaderboard.length === 0 ? <tr><td colSpan={4} className="p-8 text-center text-zinc-500">No performance data yet. Assign leads to see rankings.</td></tr> :
+                          analytics.leaderboard.map((emp, idx) => (
+                            <tr key={idx} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
+                              <td className="p-4 font-bold flex items-center gap-3">
+                                <span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs ${idx === 0 ? 'bg-yellow-500 text-black' : idx === 1 ? 'bg-zinc-300 text-black' : idx === 2 ? 'bg-orange-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>{idx + 1}</span>
+                                {emp.name}
+                              </td>
+                              <td className="p-4 text-center text-zinc-300">{emp.totalLeads}</td>
+                              <td className="p-4 text-center">
+                                <span className={`px-2 py-1 rounded-md text-xs font-bold ${emp.winRate > 50 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'}`}>{emp.winRate}%</span>
+                              </td>
+                              <td className="p-4 text-right font-black text-emerald-500">${emp.revenue.toLocaleString()}</td>
+                            </tr>
+                          ))
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                )}
+
+                {/* 📊 PIE CHART & BAR CHART */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="bg-[#111111] p-6 rounded-xl border border-zinc-800/60 shadow-sm h-96 lg:col-span-1 flex flex-col">
+                  <div className="bg-[#111111] p-4 md:p-6 rounded-xl border border-zinc-800/60 shadow-sm h-[300px] md:h-96 lg:col-span-1 flex flex-col">
                     <h3 className="text-sm font-medium text-zinc-400 mb-4">Pipeline Breakdown</h3>
-                    <div className="flex-1 w-full">
+                    <div className="flex-1 w-full min-h-0">
                       {analytics.pieData.length > 0 ? (
                         <ResponsiveContainer width="100%" height="100%">
-                          <PieChart><Pie data={analytics.pieData} innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">{analytics.pieData.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />))}</Pie><Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: '8px', color: '#fff' }} itemStyle={{ color: '#fff' }} /><Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px', color: '#a1a1aa' }} /></PieChart>
+                          <PieChart><Pie data={analytics.pieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">{analytics.pieData.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />))}</Pie><Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: '8px', color: '#fff' }} itemStyle={{ color: '#fff' }} /><Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px', color: '#a1a1aa' }} /></PieChart>
                         </ResponsiveContainer>
                       ) : (<div className="h-full flex items-center justify-center text-zinc-600 text-sm">No data</div>)}
                     </div>
                   </div>
 
-                  <div className="bg-[#111111] p-6 rounded-xl border border-zinc-800/60 shadow-sm h-96 lg:col-span-2 flex flex-col">
+                  <div className="bg-[#111111] p-4 md:p-6 rounded-xl border border-zinc-800/60 shadow-sm h-[300px] md:h-96 lg:col-span-2 flex flex-col">
                     <h3 className="text-sm font-medium text-zinc-400 mb-4">Revenue vs Churn</h3>
-                    <div className="flex-1 w-full">
+                    <div className="flex-1 w-full min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={analytics.graphData}>
+                        <ComposedChart data={analytics.graphData} margin={{ left: -20, right: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-                          <XAxis dataKey="month" stroke="#52525b" fontSize={12} tickLine={false} axisLine={false} />
-                          <YAxis stroke="#52525b" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v / 1000}k`} />
+                          <XAxis dataKey="month" stroke="#52525b" fontSize={10} tickLine={false} axisLine={false} />
+                          <YAxis stroke="#52525b" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v / 1000}k`} />
                           <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: '8px', color: '#fff' }} />
-                          <Bar dataKey="churn" name="Lost Value ($)" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={16} />
+                          <Bar dataKey="churn" name="Lost Value ($)" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={12} />
                           <Line type="monotone" dataKey="target" name="Target" stroke="#52525b" strokeDasharray="5 5" dot={false} strokeWidth={2} />
                           <Line type="monotone" dataKey="revenue" name="Won Revenue ($)" stroke="#10b981" dot={false} strokeWidth={3} />
                         </ComposedChart>
@@ -706,17 +866,18 @@ export default function MasterDashboard() {
                   </div>
                 </div>
 
-                <div className="bg-[#111111] p-6 rounded-xl border border-zinc-800/60 shadow-sm h-96 flex flex-col mt-6">
+                {/* 🛍️ PRODUCT MARKET SHARE CHART (Back in action!) */}
+                <div className="bg-[#111111] p-4 md:p-6 rounded-xl border border-zinc-800/60 shadow-sm h-[300px] md:h-96 flex flex-col mt-6">
                   <h3 className="text-sm font-medium text-emerald-400 mb-4 flex items-center gap-2"><Sparkles size={16} /> Top Products by Market Share</h3>
-                  <div className="flex-1 w-full">
+                  <div className="flex-1 w-full min-h-0">
                     {analytics.productMarketData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={analytics.productMarketData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                        <BarChart data={analytics.productMarketData} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
-                          <XAxis type="number" stroke="#52525b" fontSize={12} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                          <YAxis dataKey="name" type="category" stroke="#a1a1aa" fontSize={12} width={150} />
+                          <XAxis type="number" stroke="#52525b" fontSize={10} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                          <YAxis dataKey="name" type="category" stroke="#a1a1aa" fontSize={10} width={80} />
                           <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #10b981', borderRadius: '8px', color: '#fff' }} cursor={{ fill: '#27272a' }} />
-                          <Bar dataKey="share" name="Market Share (%)" fill="#10b981" radius={[0, 4, 4, 0]} barSize={24}>
+                          <Bar dataKey="share" name="Market Share (%)" fill="#10b981" radius={[0, 4, 4, 0]} barSize={16}>
                             {analytics.productMarketData.map((entry, index) => (
                               <Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#059669'} />
                             ))}
@@ -733,20 +894,39 @@ export default function MasterDashboard() {
         </div>
       </main>
 
-      {/* LEAD MODAL */}
+      {/* 🔥 UPDATED LEAD MODAL (WITH ASSIGN TO DROPDOWN) 🔥 */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-8 rounded-2xl w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold text-white">Deploy New Lead</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors">✕</button>
+              <button onClick={() => setIsModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button>
             </div>
             <form onSubmit={handleAddLead} className="space-y-4">
               <input type="text" required value={newLead.name} onChange={e => setNewLead({ ...newLead, name: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Contact Name" />
               <input type="text" required value={newLead.company} onChange={e => setNewLead({ ...newLead, company: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Organization" />
               <input type="number" required value={newLead.value} onChange={e => setNewLead({ ...newLead, value: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Value ($)" />
-              <button type="submit" disabled={isSaving} className="w-full bg-white text-black py-3 rounded-lg font-medium mt-6 hover:bg-zinc-200 transition-colors flex justify-center items-center gap-2">
-                {isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Save Securely'}
+
+              {/* 🔥 NEW: Assignment Dropdown */}
+              <div>
+                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Assign To (Optional)</label>
+                <select
+                  value={newLead.assignedToId}
+                  onChange={e => {
+                    const selectedMember = team.find(m => m.uid === e.target.value);
+                    setNewLead({ ...newLead, assignedToId: e.target.value, assignedToName: selectedMember?.name || 'Unassigned' });
+                  }}
+                  className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm appearance-none cursor-pointer"
+                >
+                  <option value="">-- Auto-Assign to Me --</option>
+                  {team.map(m => (
+                    <option key={m.id} value={m.uid}>{m.name} ({m.role})</option>
+                  ))}
+                </select>
+              </div>
+
+              <button type="submit" disabled={isSaving} className="w-full bg-emerald-500 text-black py-3 rounded-lg font-black mt-6 hover:bg-emerald-400 transition-all flex justify-center items-center gap-2">
+                {isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Deploy & Assign Securely'}
               </button>
             </form>
           </motion.div>
@@ -755,11 +935,11 @@ export default function MasterDashboard() {
 
       {/* 🔥 ADD PRODUCT MODAL 🔥 */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-8 rounded-2xl w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold text-white">Add New Product</h2>
-              <button onClick={() => setIsProductModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors">✕</button>
+              <button onClick={() => setIsProductModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button>
             </div>
 
             <form onSubmit={handleAddProduct} className="space-y-4">
@@ -814,11 +994,11 @@ export default function MasterDashboard() {
 
       {/* TEAM MEMBER MODAL */}
       {isTeamModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-8 rounded-2xl w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold text-white">Register New Account</h2>
-              <button onClick={() => setIsTeamModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors">✕</button>
+              <button onClick={() => setIsTeamModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button>
             </div>
             <form onSubmit={handleAddMember} className="space-y-4">
               <div>
@@ -846,8 +1026,8 @@ export default function MasterDashboard() {
 
       {/* SUCCESS MODAL */}
       {createdAccount && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-6 bg-black/90 backdrop-blur-md">
-          <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="bg-[#111111] border border-emerald-500/30 p-8 rounded-2xl w-full max-w-sm shadow-[0_0_40px_rgba(16,185,129,0.1)] text-center">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="bg-[#111111] border border-emerald-500/30 p-6 md:p-8 rounded-2xl w-full max-w-sm shadow-[0_0_40px_rgba(16,185,129,0.1)] text-center">
             <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/20">
               <CheckCircle2 size={32} className="text-emerald-400" />
             </div>
@@ -857,15 +1037,15 @@ export default function MasterDashboard() {
               <div>
                 <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Email</p>
                 <div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200">
-                  <span>{createdAccount.email}</span>
-                  <button onClick={() => copyToClipboard(createdAccount.email)} className="text-zinc-500 hover:text-white"><Copy size={14} /></button>
+                  <span className="truncate mr-2">{createdAccount.email}</span>
+                  <button onClick={() => copyToClipboard(createdAccount.email)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button>
                 </div>
               </div>
               <div>
                 <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Temporary Password</p>
                 <div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200">
-                  <span className="font-mono text-emerald-400">{createdAccount.password}</span>
-                  <button onClick={() => copyToClipboard(createdAccount.password)} className="text-zinc-500 hover:text-white"><Copy size={14} /></button>
+                  <span className="font-mono text-emerald-400 truncate mr-2">{createdAccount.password}</span>
+                  <button onClick={() => copyToClipboard(createdAccount.password)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button>
                 </div>
               </div>
             </div>
@@ -882,121 +1062,127 @@ export default function MasterDashboard() {
         </div>
       )}
 
-      {/* 🔥 NEW: AI ANALYZER MODAL (Triggered by Smart Import Button) 🔥 */}
+      {/* 🔥 NEW: AI ANALYZER MODAL (Responsive Fixed) 🔥 */}
       {showAIModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-[2.5rem] relative shadow-2xl">
-            <button onClick={() => setShowAIModal(false)} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition-colors bg-zinc-900 p-2 rounded-full z-10">
-              <X size={20} />
-            </button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-[#0c0c0c] border-0 md:border border-zinc-800 w-full h-full md:h-auto md:max-w-5xl md:max-h-[90vh] overflow-y-auto md:rounded-[2.5rem] relative shadow-2xl">
+
+            {/* Sticky close button for mobile */}
+            <div className="sticky top-0 right-0 z-20 flex justify-end p-4 md:absolute md:top-6 md:right-6 md:p-0 bg-[#0c0c0c]/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none">
+              <button onClick={() => setShowAIModal(false)} className="text-zinc-500 hover:text-white transition-colors bg-zinc-900 md:bg-zinc-900 p-2 rounded-full">
+                <X size={20} />
+              </button>
+            </div>
 
             {!aiResult ? (
-              <div className="py-16 text-center space-y-8 p-8">
+              <div className="py-12 md:py-16 text-center space-y-8 p-6 md:p-8">
                 <div className="space-y-2">
-                  <h2 className="text-3xl font-black text-white tracking-tighter">SMART EXCEL IMPORT</h2>
-                  <p className="text-zinc-500">AI will automatically detect products, <strong className="text-emerald-400">prices</strong>, and generate insights.</p>
+                  <h2 className="text-2xl md:text-3xl font-black text-white tracking-tighter">SMART EXCEL IMPORT</h2>
+                  <p className="text-sm md:text-base text-zinc-500">AI will automatically detect products, <strong className="text-emerald-400">prices</strong>, and generate insights.</p>
                 </div>
 
                 <div
                   onClick={() => aiFileInputRef.current?.click()}
-                  className="border-2 border-dashed border-zinc-800 rounded-[2rem] p-16 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all cursor-pointer group max-w-2xl mx-auto"
+                  className="border-2 border-dashed border-zinc-800 rounded-[2rem] p-8 md:p-16 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all cursor-pointer group max-w-2xl mx-auto"
                 >
                   <input type="file" ref={aiFileInputRef} onChange={processBulletproofAI} className="hidden" accept=".xlsx, .csv" />
                   {isAiProcessing ? (
                     <div className="space-y-4">
-                      <Loader2 className="mx-auto text-emerald-500 animate-spin" size={48} />
-                      <p className="text-emerald-400 font-bold animate-pulse">Running Deep AI Analysis...</p>
+                      <Loader2 className="mx-auto text-emerald-500 animate-spin w-10 h-10 md:w-12 md:h-12" />
+                      <p className="text-emerald-400 font-bold animate-pulse text-sm md:text-base">Running Deep AI Analysis...</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <UploadCloud className="mx-auto text-zinc-600 group-hover:text-emerald-500 transition-colors" size={48} />
-                      <p className="text-white font-bold">Click to Upload Excel / CSV</p>
-                      <p className="text-zinc-600 text-xs uppercase tracking-widest font-bold">Any Format, Any Structure</p>
+                      <UploadCloud className="mx-auto text-zinc-600 group-hover:text-emerald-500 transition-colors w-10 h-10 md:w-12 md:h-12" />
+                      <p className="text-white font-bold text-sm md:text-base">Click to Upload Excel / CSV</p>
+                      <p className="text-zinc-600 text-[10px] md:text-xs uppercase tracking-widest font-bold">Any Format, Any Structure</p>
                     </div>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="space-y-8 animate-in zoom-in-95 duration-500 p-8">
+              <div className="space-y-6 md:space-y-8 animate-in zoom-in-95 duration-500 p-4 md:p-8">
 
-                {/* 🔥 THE PDF CONTAINER (Iske andar ka part PDF mein jayega) 🔥 */}
-                <div id="pdf-report-container" className="bg-[#0c0c0c] p-6 rounded-2xl">
-                  <div className="flex items-center gap-4 border-b border-zinc-800 pb-6 mb-6">
-                    <div className="p-4 bg-emerald-500/20 rounded-2xl text-emerald-500"><Sparkles /></div>
-                    <div className="flex-1">
-                      <h2 className="text-3xl font-black text-white uppercase">{aiResult.bizName}</h2>
-                      <p className="text-zinc-500 text-xs font-bold tracking-widest uppercase">
-                        Executive AI Report • <span className="text-emerald-400">{new Date().toLocaleDateString()}</span>
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-                    <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Projected Revenue</p>
-                        <DollarSign size={14} className="text-emerald-500" />
+                {/* 🔥 THE PDF CONTAINER 🔥 */}
+                <div className="overflow-x-auto pb-4 custom-scrollbar">
+                  <div id="pdf-report-container" className="bg-[#0c0c0c] p-6 md:p-8 rounded-2xl min-w-[800px]">
+                    <div className="flex items-center gap-4 border-b border-zinc-800 pb-6 mb-6">
+                      <div className="p-4 bg-emerald-500/20 rounded-2xl text-emerald-500"><Sparkles /></div>
+                      <div className="flex-1">
+                        <h2 className="text-3xl font-black text-white uppercase">{aiResult.bizName}</h2>
+                        <p className="text-zinc-500 text-xs font-bold tracking-widest uppercase mt-1">
+                          Executive AI Report • <span className="text-emerald-400">{new Date().toLocaleDateString()}</span>
+                        </p>
                       </div>
-                      <p className="text-4xl font-black text-white">₹{aiResult.totalRevenue.toLocaleString()}</p>
                     </div>
 
-                    <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Average Unit Price</p>
-                        <BarChart3 size={14} className="text-emerald-500" />
-                      </div>
-                      <p className="text-4xl font-black text-white">₹{aiResult.avgPrice.toFixed(0)}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-zinc-900/30 p-8 rounded-[2rem] border border-zinc-800 relative overflow-hidden mb-8">
-                    <div className="absolute top-0 right-0 p-6 opacity-5"><Sparkles size={60} /></div>
-                    <p className="text-emerald-500 text-xs font-black uppercase tracking-[0.2em] mb-6">Strategic AI Insights</p>
-                    <div className="space-y-4">
-                      {aiResult.insights.map((ins: string, i: number) => (
-                        <div key={i} className="flex gap-4 items-start">
-                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2" />
-                          <p className="text-zinc-300 text-sm leading-relaxed">{ins}</p>
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                      <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Projected Revenue</p>
+                          <DollarSign size={14} className="text-emerald-500" />
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                        <p className="text-4xl font-black text-white">₹{aiResult.totalRevenue.toLocaleString()}</p>
+                      </div>
 
-                  {/* 🔥 NEW TABLE FOR PDF EXPORT 🔥 */}
-                  <div className="border border-zinc-800 rounded-2xl overflow-hidden">
-                    <div className="bg-zinc-900 px-6 py-4 border-b border-zinc-800">
-                      <p className="text-white text-sm font-bold uppercase tracking-widest">Top Analyzed Products</p>
+                      <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Average Unit Price</p>
+                          <BarChart3 size={14} className="text-emerald-500" />
+                        </div>
+                        <p className="text-4xl font-black text-white">₹{aiResult.avgPrice.toFixed(0)}</p>
+                      </div>
                     </div>
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-zinc-800/60 bg-[#161616]">
-                          <th className="p-4 text-zinc-400 font-medium">Product Name</th>
-                          <th className="p-4 text-zinc-400 font-medium">Category</th>
-                          <th className="p-4 text-zinc-400 font-medium text-right">Price</th>
-                          <th className="p-4 text-zinc-400 font-medium text-center">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {aiResult.processedProducts.slice(0, 5).map((p: any, i: number) => (
-                          <tr key={i} className="border-b border-zinc-800/30 bg-[#0c0c0c]">
-                            <td className="p-4 font-medium text-zinc-200">{p.name}</td>
-                            <td className="p-4 text-zinc-500"><Tag size={10} className="inline mr-1 text-emerald-500" /> {p.category}</td>
-                            <td className="p-4 text-right text-emerald-400 font-bold">₹{p.price.toLocaleString()}</td>
-                            <td className="p-4 text-center text-zinc-300">{p.stock}</td>
-                          </tr>
+
+                    <div className="bg-zinc-900/30 p-8 rounded-[2rem] border border-zinc-800 relative overflow-hidden mb-8">
+                      <div className="absolute top-0 right-0 p-6 opacity-5"><Sparkles size={60} /></div>
+                      <p className="text-emerald-500 text-xs font-black uppercase tracking-[0.2em] mb-6">Strategic AI Insights</p>
+                      <div className="space-y-4">
+                        {aiResult.insights.map((ins: string, i: number) => (
+                          <div key={i} className="flex gap-4 items-start">
+                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2 shrink-0" />
+                            <p className="text-zinc-300 text-sm leading-relaxed">{ins}</p>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    </div>
+
+                    {/* PDF Table */}
+                    <div className="border border-zinc-800 rounded-2xl overflow-hidden">
+                      <div className="bg-zinc-900 px-6 py-4 border-b border-zinc-800">
+                        <p className="text-white text-sm font-bold uppercase tracking-widest">Top Analyzed Products</p>
+                      </div>
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-zinc-800/60 bg-[#161616]">
+                            <th className="p-4 text-zinc-400 font-medium">Product Name</th>
+                            <th className="p-4 text-zinc-400 font-medium">Category</th>
+                            <th className="p-4 text-zinc-400 font-medium text-right">Price</th>
+                            <th className="p-4 text-zinc-400 font-medium text-center">Stock</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {aiResult.processedProducts.slice(0, 5).map((p: any, i: number) => (
+                            <tr key={i} className="border-b border-zinc-800/30 bg-[#0c0c0c]">
+                              <td className="p-4 font-medium text-zinc-200">{p.name}</td>
+                              <td className="p-4 text-zinc-500"><Tag size={10} className="inline mr-1 text-emerald-500" /> {p.category}</td>
+                              <td className="p-4 text-right text-emerald-400 font-bold">₹{p.price.toLocaleString()}</td>
+                              <td className="p-4 text-center text-zinc-300">{p.stock}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
 
-                {/* 🔥 ACTION BUTTONS (Ye PDF mein nahi jayenge) 🔥 */}
-                <div className="grid grid-cols-2 gap-4 mt-6">
-                  <button onClick={handleSaveAiProductsToDb} disabled={isSaving} className="py-4 bg-emerald-500 text-black font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-400 transition-all hover:scale-[1.02]">
+                {/* 🔥 ACTION BUTTONS 🔥 */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+                  <button onClick={handleSaveAiProductsToDb} disabled={isSaving} className="py-4 px-4 bg-emerald-500 text-black text-sm md:text-base font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-400 transition-all hover:scale-[1.02]">
                     {isSaving ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
                     {isSaving ? "Saving to Database..." : "Save Data to Database"}
                   </button>
-                  <button onClick={handleExportPDF} disabled={isExporting} className="py-4 bg-zinc-800 text-white font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all">
+                  <button onClick={handleExportPDF} disabled={isExporting} className="py-4 px-4 bg-zinc-800 text-white text-sm md:text-base font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all">
                     {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
                     {isExporting ? "Generating PDF..." : "Export Executive Report"}
                   </button>
@@ -1006,6 +1192,15 @@ export default function MasterDashboard() {
           </div>
         </div>
       )}
+
+      {/* Tailwind Custom Scrollbar style for tables */}
+      <style dangerouslySetInnerHTML={{
+        __html: `
+        .custom-scrollbar::-webkit-scrollbar { height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #0c0c0c; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+      `}} />
 
     </div>
   );
