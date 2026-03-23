@@ -7,7 +7,7 @@ import {
   LayoutDashboard, BarChart3, Bot, Settings, LogOut,
   Plus, User as UserIcon, Loader2, Trash2, Calendar, Users, Copy, CheckCircle2, Mail, Package, TrendingUp, Tag, Sparkles,
   X, DollarSign, ShieldCheck, Download, Binary, Wrench, Handshake, AlertCircle, ChevronRight, UploadCloud, Menu, Trophy, Send, History, Kanban, List as ListIcon, Search, Filter, Coffee, Check,
-  Save, Building, Bell, Lock, Globe, Lightbulb, BrainCircuit, Target, PieChart as PieChartIcon
+  Save, Building, Bell, Lock, Globe, Lightbulb, BrainCircuit, Target, PieChart as PieChartIcon, ClipboardList, MessageSquare, ExternalLink
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -24,6 +24,11 @@ import * as XLSX from 'xlsx';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 
+// 🔥 LOTTIE ANIMATION IMPORT 🔥
+import Lottie from "lottie-react";
+// ⚠️ MAKE SURE YOUR JSON FILE IS NAMED 'animation.json' AND PLACED IN THE SAME FOLDER ⚠️
+import loadingAnimationData from "./animation.json";
+
 // 📝 Interfaces
 interface Lead { id: string; name: string; company: string; email?: string; status: string; value: number; assignedToId?: string; assignedToName?: string; createdAt?: any; }
 interface MonthlyData { month: string; revenue: number; churn: number; target: number; forecast?: number; }
@@ -35,6 +40,8 @@ interface EmployeeStats { name: string; role: string; totalLeads: number; wonLea
 interface ChatMessage { role: 'user' | 'ai'; content: string; }
 interface ActivityLog { id: string; action: string; module: string; description: string; userName: string; userRole: string; createdAt: any; }
 interface LeaveRequest { id: string; userId: string; userName: string; userRole: string; targetRole: string; reason: string; aiSummary: string; startDate: string; endDate: string; status: string; createdAt: any; }
+interface TaskItem { id: string; title: string; description: string; assignedById: string; assignedByName: string; assignedByRole: string; assignedToId: string; assignedToName: string; assignedToRole: string; status: string; createdAt: any; }
+interface ChatRoomMessage { id: string; text: string; senderId: string; senderName: string; senderRole: string; room: string; createdAt: any; }
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -70,9 +77,13 @@ const AI_AGENTS = [
 
 export default function MasterDashboard() {
   const router = useRouter();
+
+  // 🔥 CINEMATIC TRANSITION STATE 🔥
   const [activeTab, setActiveTab] = useState('Dashboard');
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [leadView, setLeadView] = useState<'board' | 'list'>('board');
 
   const [userRole, setUserRole] = useState('');
@@ -85,11 +96,17 @@ export default function MasterDashboard() {
   const [products, setProducts] = useState<Product[]>([]);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [roomMessages, setRoomMessages] = useState<ChatRoomMessage[]>([]);
 
   // GLOBAL FILTERS STATE
   const [activitySearch, setActivitySearch] = useState('');
   const [activityFilterAction, setActivityFilterAction] = useState('All');
   const [activityFilterModule, setActivityFilterModule] = useState('All');
+  const todayDate = new Date();
+  const localTodayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
+  const [activityDateFilter, setActivityDateFilter] = useState(localTodayStr);
+
   const [productSearch, setProductSearch] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('All');
   const [teamSearch, setTeamSearch] = useState('');
@@ -104,6 +121,13 @@ export default function MasterDashboard() {
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [autoInvoice, setAutoInvoice] = useState(true);
   const [currency, setCurrency] = useState('USD ($)');
+  const [monthlyTargetRaw, setMonthlyTargetRaw] = useState(50000);
+  const [showCelebration, setShowCelebration] = useState(false);
+
+  // MESSAGING STATE
+  const [activeRoom, setActiveRoom] = useState('General');
+  const [roomMessageInput, setRoomMessageInput] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const currencySymbol = useMemo(() => {
     if (currency.includes('₹')) return '₹';
@@ -113,6 +137,29 @@ export default function MasterDashboard() {
   }, [currency]);
 
   const currentRate = useMemo(() => EXCHANGE_RATES[currency] || 1, [currency]);
+  const monthlyTarget = useMemo(() => monthlyTargetRaw * currentRate, [monthlyTargetRaw, currentRate]);
+
+  const availableRooms = useMemo(() => {
+    const rooms = ['General'];
+    if (['CEO', 'HR', 'Manager'].includes(userRole)) rooms.push('Leadership');
+    if (['Manager', 'Employee'].includes(userRole)) rooms.push('Team Sync');
+    return rooms;
+  }, [userRole]);
+
+  useEffect(() => {
+    if (userRole && !availableRooms.includes(activeRoom)) {
+      setActiveRoom(availableRooms[0]);
+    }
+  }, [availableRooms, activeRoom, userRole]);
+
+  // SMART UNREAD MESSAGES DOT LOGIC
+  const hasUnreadMessages = useMemo(() => {
+    if (!currentUserData || roomMessages.length === 0) return false;
+    const relevantMsgs = roomMessages.filter(m => availableRooms.includes(m.room));
+    if (relevantMsgs.length === 0) return false;
+    const lastMsg = relevantMsgs[relevantMsgs.length - 1];
+    return lastMsg.senderId !== currentUserData.uid && activeTab !== 'Messages';
+  }, [roomMessages, availableRooms, currentUserData, activeTab]);
 
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -131,6 +178,7 @@ export default function MasterDashboard() {
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
 
   const [createdAccount, setCreatedAccount] = useState<{ name: string, email: string, password: string } | null>(null);
   const [dismissedPopups, setDismissedPopups] = useState<string[]>([]);
@@ -139,13 +187,9 @@ export default function MasterDashboard() {
   const [newMember, setNewMember] = useState({ name: '', email: '', role: 'Employee' });
   const [newProduct, setNewProduct] = useState({ name: '', category: 'Software', price: '', marketPrice: '', marketShare: '', stock: '', isTrending: false });
   const [leaveForm, setLeaveForm] = useState({ startDate: '', endDate: '', reason: '' });
+  const [newTask, setNewTask] = useState({ title: '', description: '', assignedToId: '', assignedToName: '', assignedToRole: '' });
 
-  // 🔥 SINGLE AI CHAT STATE (For Manager & Employee) 🔥
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    { role: 'ai', content: "Hello! I am your AI Business Assistant. I am connected to your live dashboard data. Ask me to analyze performance, calculate metrics, or suggest strategies based on your current pipeline and products." }
-  ]);
-
-  // 🔥 MULTI-AGENT CHAT STATE (For CEO & HR) 🔥
+  // AI CHAT STATE
   const [activeAgentId, setActiveAgentId] = useState('master');
   const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({
     master: [{ role: 'ai', content: "Hello Boss. I am your Central System AI. I monitor everything. What metrics would you like to analyze?" }],
@@ -153,19 +197,26 @@ export default function MasterDashboard() {
     innovation: [{ role: 'ai', content: "Greetings! I am your Innovation Strategist. Give me your current product metrics and I'll suggest disruptive ideas to scale your market share." }],
     finance: [{ role: 'ai', content: "Hi! Finance Optimizer here. I track your expected revenue vs churn. Want to discuss cost-cutting or pricing strategies?" }]
   });
-
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    { role: 'ai', content: "Hello! I am your AI Business Assistant. I am connected to your live dashboard data. Ask me to analyze performance, calculate metrics, or suggest strategies based on your current pipeline and products." }
+  ]);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // DYNAMIC BROWSER TAB TITLE
   useEffect(() => {
-    if (userRole) {
-      document.title = `Company Handler | ${userRole} Portal`;
-    } else {
-      document.title = 'Company Handler | Loading...';
-    }
+    if (userRole) { document.title = `Company Handler | ${userRole} Portal`; }
+    else { document.title = 'Company Handler | Loading...'; }
   }, [userRole]);
+
+  // HIDE CELEBRATION AFTER 5 SECONDS
+  useEffect(() => {
+    if (showCelebration) {
+      const timer = setTimeout(() => setShowCelebration(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [showCelebration]);
 
   useEffect(() => {
     let unsubscribeUser: (() => void) | null = null;
@@ -183,7 +234,8 @@ export default function MasterDashboard() {
             setUserRole('CEO');
             setProfileName('Super Admin');
           }
-          setIsAuthChecking(false);
+          // Add a tiny delay so the auth Lottie animation feels smooth before cutting off
+          setTimeout(() => setIsAuthChecking(false), 800);
         });
       }
     });
@@ -195,27 +247,99 @@ export default function MasterDashboard() {
     const unsubscribeLeads = onSnapshot(query(collection(db, 'leads'), orderBy('createdAt', 'desc')), (snapshot) => { setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Lead[]); setIsLoadingData(false); });
     const unsubscribeTeam = onSnapshot(query(collection(db, 'company_team'), orderBy('createdAt', 'desc')), (snapshot) => { setTeam(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as TeamMember[]); });
     const unsubscribeProducts = onSnapshot(query(collection(db, 'products'), orderBy('createdAt', 'desc')), (snapshot) => { setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Product[]); });
-    const unsubscribeLogs = onSnapshot(query(collection(db, 'activity_logs'), orderBy('createdAt', 'desc'), limit(100)), (snapshot) => { setActivities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ActivityLog[]); });
+    const unsubscribeLogs = onSnapshot(query(collection(db, 'activity_logs'), orderBy('createdAt', 'desc'), limit(500)), (snapshot) => { setActivities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ActivityLog[]); });
     const unsubscribeLeaves = onSnapshot(query(collection(db, 'leave_requests'), orderBy('createdAt', 'desc')), (snapshot) => { setLeaveRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as LeaveRequest[]); });
+    const unsubscribeTasks = onSnapshot(query(collection(db, 'tasks'), orderBy('createdAt', 'desc')), (snapshot) => { setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as TaskItem[]); });
+    const unsubscribeMessages = onSnapshot(query(collection(db, 'messages'), orderBy('createdAt', 'asc'), limit(200)), (snapshot) => { setRoomMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatRoomMessage[]); });
 
-    return () => { unsubscribeLeads(); unsubscribeTeam(); unsubscribeProducts(); unsubscribeLogs(); unsubscribeLeaves(); };
+    return () => { unsubscribeLeads(); unsubscribeTeam(); unsubscribeProducts(); unsubscribeLogs(); unsubscribeLeaves(); unsubscribeTasks(); unsubscribeMessages(); };
   }, [isAuthChecking]);
 
   useEffect(() => {
     if (activeTab === 'Automation') { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }
-  }, [chatHistories, chatMessages, activeAgentId, activeTab]);
+    if (activeTab === 'Messages') { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }
+  }, [chatHistories, chatMessages, activeAgentId, activeTab, roomMessages, activeRoom]);
+
+  // 🔥 ANIMATED TAB CHANGER 🔥
+  const handleTabChange = (tabId: string) => {
+    if (activeTab === tabId) return;
+    setIsTransitioning(true);
+    setIsMobileMenuOpen(false);
+
+    // Switch tab silently in background
+    setTimeout(() => setActiveTab(tabId), 400);
+
+    // Hide loading screen after animation completes
+    setTimeout(() => {
+      setIsTransitioning(false);
+    }, 1200);
+  };
 
   const logActivity = async (action: string, module: string, description: string) => {
     if (!currentUserData || currentUserData.name === 'Super Admin') return;
     try { await addDoc(collection(db, 'activity_logs'), { action, module, description, userName: currentUserData.name, userRole: currentUserData.role, createdAt: serverTimestamp() }); } catch (error) { }
   };
 
+  const handleNotificationClick = (moduleName: string) => {
+    setShowNotifications(false);
+    const mod = moduleName.toLowerCase();
+    if (mod.includes('lead')) handleTabChange('Dashboard');
+    else if (mod.includes('task')) handleTabChange('Tasks');
+    else if (mod.includes('leave') || mod.includes('system')) handleTabChange('Leaves');
+    else if (mod.includes('product')) handleTabChange('Products');
+    else if (mod.includes('team')) handleTabChange('Team');
+    else if (mod.includes('finance') || mod.includes('analytics')) handleTabChange('Analytics');
+    else handleTabChange('Activity');
+  };
+
+  const copyTrackingLink = (leadId: string, leadName: string) => {
+    const url = `${window.location.origin}/track/${leadId}`;
+    handleCopyToClipboard(url);
+    logActivity('UPDATE', 'Lead', `Generated secure tracking link for ${leadName}`);
+  };
+
+  const handleCopyToClipboard = async (text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("✅ Link copied successfully!");
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      alert("❌ Could not copy to clipboard. Your browser might be blocking it.");
+    }
+  };
+
+  const handleSendTrackingLink = (leadId: string, leadName: string, leadEmail: string) => {
+    const url = `${window.location.origin}/track/${leadId}`;
+    navigator.clipboard.writeText(url).catch(() => { });
+    logActivity('UPDATE', 'Lead', `Initiated sending secure tracking link to ${leadName}`);
+
+    if (leadEmail) {
+      const subject = encodeURIComponent(`Track your project status - ${leadName}`);
+      const body = encodeURIComponent(`Hello ${leadName},\n\nYou can track the live status of your project in our portal here:\n${url}\n\nBest regards,\n${currentUserData?.name || 'The Team'}`);
+      const gmailLink = `https://mail.google.com/mail/?view=cm&fs=1&to=${leadEmail}&su=${subject}&body=${body}`;
+      window.open(gmailLink, '_blank');
+      alert(`🔗 Magic Link Copied!\nOpening Gmail to send to ${leadEmail}...`);
+    } else {
+      alert(`🔗 Magic Link Copied to Clipboard!\n\nNo email address found for this lead. You can manually paste and send this link:\n${url}`);
+    }
+  };
+
   const filteredActivities = useMemo(() => activities.filter(log => {
     const searchLower = activitySearch.toLowerCase();
-    return (log.description.toLowerCase().includes(searchLower) || log.userName.toLowerCase().includes(searchLower)) &&
-      (activityFilterAction === 'All' || log.action === activityFilterAction) &&
-      (activityFilterModule === 'All' || log.module === activityFilterModule);
-  }), [activities, activitySearch, activityFilterAction, activityFilterModule]);
+    const matchSearch = log.description.toLowerCase().includes(searchLower) || log.userName.toLowerCase().includes(searchLower);
+    const matchAction = activityFilterAction === 'All' || log.action === activityFilterAction;
+    const matchModule = activityFilterModule === 'All' || log.module === activityFilterModule;
+
+    let matchDate = true;
+    if (activityDateFilter && log.createdAt) {
+      const logDate = log.createdAt.toDate ? log.createdAt.toDate() : new Date(log.createdAt);
+      const logDateStr = `${logDate.getFullYear()}-${String(logDate.getMonth() + 1).padStart(2, '0')}-${String(logDate.getDate()).padStart(2, '0')}`;
+      matchDate = logDateStr === activityDateFilter;
+    }
+
+    return matchSearch && matchAction && matchModule && matchDate;
+  }), [activities, activitySearch, activityFilterAction, activityFilterModule, activityDateFilter]);
 
   const filteredProducts = useMemo(() => products.filter(p => {
     const searchLower = productSearch.toLowerCase();
@@ -258,7 +382,133 @@ export default function MasterDashboard() {
 
   const activePopup = useMemo(() => leaveRequests.find(l => l.targetRole === userRole && l.status === 'Pending' && !dismissedPopups.includes(l.id)), [leaveRequests, userRole, dismissedPopups]);
 
-  // CURRENCY ENABLED ANALYTICS WITH RADAR & FORECAST DATA
+  // TASKS HIERARCHY LOGIC
+  const targetTaskRole = useMemo(() => {
+    if (userRole === 'CEO') return 'HR';
+    if (userRole === 'HR') return 'Manager';
+    if (userRole === 'Manager') return 'Employee';
+    return '';
+  }, [userRole]);
+
+  const eligibleTaskAssignees = useMemo(() => {
+    return team.filter(m => m.role === targetTaskRole);
+  }, [team, targetTaskRole]);
+
+  const relevantTasks = useMemo(() => {
+    if (userRole === 'Employee') return tasks.filter(t => t.assignedToId === currentUserData?.uid && t.status !== 'Completed');
+    return tasks;
+  }, [tasks, userRole, currentUserData]);
+
+  const handleGenerateAITasks = async () => {
+    setIsSaving(true);
+    try {
+      const prompt = `Act as the ${userRole} of a company. Based on a CRM dashboard context, generate exactly 3 strategic tasks to assign to the ${targetTaskRole}s. Return ONLY a valid JSON array like this: [{"title": "task title", "description": "short description"}]`;
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const res = await model.generateContent(prompt);
+      const text = res.response.text().replace(/```json|```/g, "").trim();
+      const generated = JSON.parse(text);
+
+      let chatFeedback = `I have generated and assigned the following strategic tasks to the **${targetTaskRole}s**:\n\n`;
+
+      for (const t of generated) {
+        const randomAssignee = eligibleTaskAssignees.length > 0 ? eligibleTaskAssignees[Math.floor(Math.random() * eligibleTaskAssignees.length)] : null;
+        await addDoc(collection(db, 'tasks'), {
+          title: t.title,
+          description: t.description,
+          assignedById: currentUserData?.uid || '',
+          assignedByName: currentUserData?.name || 'System',
+          assignedByRole: userRole,
+          assignedToId: randomAssignee?.uid || '',
+          assignedToName: randomAssignee?.name || `Unassigned ${targetTaskRole}`,
+          assignedToRole: targetTaskRole,
+          status: 'Pending',
+          createdAt: serverTimestamp()
+        });
+        chatFeedback += `- **${t.title}** (Assigned to: ${randomAssignee?.name || 'Unassigned'})\n`;
+      }
+
+      await logActivity('CREATE', 'Task', `AI Auto-Generated 3 strategy tasks for ${targetTaskRole}s.`);
+
+      if (userRole === 'CEO' || userRole === 'HR') {
+        setChatHistories(prev => ({ ...prev, [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: chatFeedback }] }));
+      } else {
+        setChatMessages(prev => [...prev, { role: 'ai', content: chatFeedback }]);
+      }
+
+      if (activeTab !== 'Automation') { handleTabChange('Automation'); }
+
+    } catch (err) { alert("AI Task generation failed. Check API key or data format."); } finally { setIsSaving(false); }
+  };
+
+  const handleCreateTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTask.title || !newTask.assignedToId) return;
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, 'tasks'), {
+        title: newTask.title,
+        description: newTask.description,
+        assignedById: currentUserData?.uid || '',
+        assignedByName: currentUserData?.name || 'System',
+        assignedByRole: userRole,
+        assignedToId: newTask.assignedToId,
+        assignedToName: newTask.assignedToName,
+        assignedToRole: newTask.assignedToRole,
+        status: 'Pending',
+        createdAt: serverTimestamp()
+      });
+      await logActivity('CREATE', 'Task', `Delegated task "${newTask.title}" to ${newTask.assignedToName}`);
+      setIsTaskModalOpen(false);
+      setNewTask({ title: '', description: '', assignedToId: '', assignedToName: '', assignedToRole: '' });
+    } catch (err) { alert("Failed to create task."); } finally { setIsSaving(false); }
+  };
+
+  const handleCompleteTask = async (task: TaskItem) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), { status: 'Completed' });
+      await logActivity('UPDATE', 'Task', `✅ Completed task: "${task.title}". Notifying Assigner (${task.assignedByName}).`);
+    } catch (error) { console.error(error); }
+  };
+
+  const handleSendRoomMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!roomMessageInput.trim() || !currentUserData) return;
+    const text = roomMessageInput;
+    setRoomMessageInput('');
+    try {
+      await addDoc(collection(db, 'messages'), {
+        text: text,
+        senderId: currentUserData.uid || 'system',
+        senderName: currentUserData.name,
+        senderRole: userRole,
+        room: activeRoom,
+        createdAt: serverTimestamp()
+      });
+    } catch (err) { console.error(err); }
+  };
+
+  const handleDropAIDailyBriefing = async () => {
+    if (!currentUserData) return;
+    setIsSaving(true);
+    try {
+      const prompt = `You are the Master Central AI. Act as the CEO's assistant. Provide a quick, punchy daily briefing to be sent to the Leadership team (HR & Managers). Mention today's focus based on general SaaS CRM goals. Suggest 1 strategic task for HR and 1 for Managers. Format as a professional, motivating message with bullet points.`;
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const res = await model.generateContent(prompt);
+
+      await addDoc(collection(db, 'messages'), {
+        text: `**🤖 CEO's AI Daily Briefing:**\n\n${res.response.text()}`,
+        senderId: 'ai-master',
+        senderName: 'Master Central AI',
+        senderRole: 'System',
+        room: 'Leadership',
+        createdAt: serverTimestamp()
+      });
+
+      setActiveRoom('Leadership');
+    } catch (err) { alert("Failed to generate AI Briefing."); } finally { setIsSaving(false); }
+  };
+
+  // CURRENCY ENABLED ANALYTICS WITH RADAR, FORECAST & TARGET PROGRESS
   const analytics = useMemo(() => {
     const now = new Date(); const cutoffDate = new Date();
     if (timeRange === '7d') cutoffDate.setDate(now.getDate() - 7);
@@ -309,28 +559,17 @@ export default function MasterDashboard() {
     const currentMonthIndex = new Date().getMonth();
     const dynamicGraphData = Object.values(dataMap).map((d, index) => {
       const isFuture = index > currentMonthIndex;
-      return {
-        ...d,
-        revenue: d.revenue * currentRate,
-        churn: d.churn * currentRate,
-        target: d.target * currentRate,
-        forecast: isFuture ? (Math.random() * 20000 + 30000) * currentRate : undefined
-      };
+      return { ...d, revenue: d.revenue * currentRate, churn: d.churn * currentRate, target: d.target * currentRate, forecast: isFuture ? (Math.random() * 20000 + 30000) * currentRate : undefined };
     });
 
     const radarData = leaderboard.length > 0 ? leaderboard.map(emp => ({
-      subject: emp.name.split(' ')[0],
-      WinRate: emp.winRate,
-      Leads: emp.totalLeads * 5,
-      RevenueScore: Math.min((emp.revenue / (totalGross || 1)) * 100 * 2, 100),
-      fullMark: 100
+      subject: emp.name.split(' ')[0], WinRate: emp.winRate, Leads: emp.totalLeads * 5, RevenueScore: Math.min((emp.revenue / (totalGross || 1)) * 100 * 2, 100), fullMark: 100
     })) : [{ subject: 'No Data', WinRate: 0, Leads: 0, RevenueScore: 0, fullMark: 100 }];
 
     return {
       totalGross: totalGross * currentRate, expectedRev: expectedRev * currentRate, wonRev: wonRev * currentRate, winRate, avgDealSize: avgDealSize * currentRate, activeCount: counts.New + counts['In Progress'],
       graphData: dynamicGraphData, pieData, totalInventoryValue: totalInventoryValue * currentRate, productMarketData: productMarketData.slice(0, 5),
-      leaderboard: leaderboard.map(l => ({ ...l, revenue: l.revenue * currentRate })),
-      radarData
+      leaderboard: leaderboard.map(l => ({ ...l, revenue: l.revenue * currentRate })), radarData
     };
   }, [leads, timeRange, products, currentRate]);
 
@@ -352,70 +591,30 @@ export default function MasterDashboard() {
     try { await sendPasswordResetEmail(auth, currentUserData.email); logActivity('UPDATE', 'System', `Requested secure password reset link.`); alert(`✅ Password reset link dispatched securely to ${currentUserData.email}`); } catch (err) { alert("Failed to send reset link. Ensure you are logged in correctly."); }
   };
 
-  // 🔥 MULTI-AGENT CHAT HANDLER (For CEO/HR) 🔥
   const handleSendMultiAgentMessage = async (e: React.FormEvent) => {
     e.preventDefault(); if (!chatInput.trim()) return;
     const userMessage = chatInput;
-
-    setChatHistories(prev => ({
-      ...prev,
-      [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'user', content: userMessage }]
-    }));
-    setChatInput('');
-    setIsChatLoading(true);
-
+    setChatHistories(prev => ({ ...prev, [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'user', content: userMessage }] }));
+    setChatInput(''); setIsChatLoading(true);
     try {
       let rolePrompt = "You are the Master Central AI Business Assistant.";
       if (activeAgentId === 'hr') rolePrompt = "You are a specialized HR & Performance Evaluator AI. Analyze employee win rates, lead handling, and efficiency. Be strict but encouraging.";
       if (activeAgentId === 'innovation') rolePrompt = "You are an Innovation Strategist. Look at product market share and pipeline active counts. Suggest wild, disruptive, out-of-the-box business ideas.";
       if (activeAgentId === 'finance') rolePrompt = "You are a Finance Optimizer. Look at Gross Revenue, Churn (Lost value), and Win Rates. Suggest aggressive cost-cutting or pricing optimizations.";
 
-      const contextPrompt = `
-        ${rolePrompt}
-        You have direct access to the live company data. Give short, professional insights using Markdown (bold, lists). Do not invent numbers that aren't provided.
-
-        LIVE CONTEXT:
-        - Currency: ${currencySymbol}
-        - Total Pipeline Gross: ${currencySymbol}${analytics.totalGross.toFixed(0)}
-        - Total Won Revenue: ${currencySymbol}${analytics.wonRev.toFixed(0)}
-        - Expected Revenue: ${currencySymbol}${analytics.expectedRev.toFixed(0)}
-        - Current Win Rate: ${analytics.winRate}%
-        - Active Leads Count: ${analytics.activeCount}
-        - Total Inventory Value: ${currencySymbol}${analytics.totalInventoryValue}
-        
-        TOP PERFORMING EMPLOYEES:
-        ${analytics.leaderboard.map(emp => `- ${emp.name}: ${currencySymbol}${emp.revenue} won, ${emp.winRate}% win rate`).join('\n') || 'No data yet.'}
-
-        USER ROLE: ${userRole}
-        USER REQUEST: "${userMessage}"
-      `;
-
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const result = await model.generateContent(contextPrompt);
-
-      setChatHistories(prev => ({
-        ...prev,
-        [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: result.response.text() }]
-      }));
-    } catch (error: any) {
-      setChatHistories(prev => ({
-        ...prev,
-        [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: "⚠️ System error connecting to AI core. Check your API Keys." }]
-      }));
-    } finally {
-      setIsChatLoading(false);
-    }
+      const contextPrompt = `${rolePrompt} You have direct access to the live company data. Give short, professional insights using Markdown (bold, lists). Do not invent numbers that aren't provided. LIVE CONTEXT: - Currency: ${currencySymbol} - Total Pipeline Gross: ${currencySymbol}${analytics.totalGross.toFixed(0)} - Total Won Revenue: ${currencySymbol}${analytics.wonRev.toFixed(0)} - Expected Revenue: ${currencySymbol}${analytics.expectedRev.toFixed(0)} - Current Win Rate: ${analytics.winRate}% - Active Leads Count: ${analytics.activeCount} - Total Inventory Value: ${currencySymbol}${analytics.totalInventoryValue} TOP PERFORMING EMPLOYEES: ${analytics.leaderboard.map(emp => `- ${emp.name}: ${currencySymbol}${emp.revenue} won, ${emp.winRate}% win rate`).join('\n') || 'No data yet.'} USER ROLE: ${userRole} USER REQUEST: "${userMessage}"`;
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); const result = await model.generateContent(contextPrompt);
+      setChatHistories(prev => ({ ...prev, [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: result.response.text() }] }));
+    } catch (error: any) { setChatHistories(prev => ({ ...prev, [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: "⚠️ System error connecting to AI core. Check your API Keys." }] })); } finally { setIsChatLoading(false); }
   };
 
-  // 🔥 SINGLE AI CHAT HANDLER (For Manager/Employee) 🔥
   const handleSendSingleChatMessage = async (e: React.FormEvent) => {
     e.preventDefault(); if (!chatInput.trim()) return;
     const userMessage = chatInput;
     setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]); setChatInput(''); setIsChatLoading(true);
     try {
       const contextPrompt = `You are an AI Business Assistant helping an Employee/Manager. Data: Gross: ${currencySymbol}${analytics.totalGross.toFixed(0)}, Won: ${currencySymbol}${analytics.wonRev.toFixed(0)}. Request: "${userMessage}"`;
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const result = await model.generateContent(contextPrompt);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); const result = await model.generateContent(contextPrompt);
       setChatMessages(prev => [...prev, { role: 'ai', content: result.response.text() }]);
     } catch (error: any) { setChatMessages(prev => [...prev, { role: 'ai', content: "⚠️ System error connecting to AI core." }]); } finally { setIsChatLoading(false); }
   };
@@ -445,16 +644,13 @@ export default function MasterDashboard() {
       try {
         const bstr = evt.target?.result; const wb = XLSX.read(bstr, { type: 'binary' }); const data: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
         if (data.length === 0) throw new Error("Excel is empty");
-
         const exactHeaders = Object.keys(data[0]); const sample = JSON.stringify(data.slice(0, 5));
         const prompt = `You are Data Analyst. Headers: ${JSON.stringify(exactHeaders)}. Sample: ${sample}. Output valid JSON: {"productCol": "...", "priceCol": "...", "qtyCol": "...", "catCol": "...", "bizName": "...", "insights": ["...", "..."]}`;
-
         let configText = "";
         try { const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); const aiRes = await model.generateContent(prompt); configText = aiRes.response.text(); } catch (err) { throw new Error("AI provider failed."); }
         const config = JSON.parse(configText.replace(/```json|```/g, "").trim());
         const getRealColumn = (aiGuess: string, keywords: string[]) => exactHeaders.includes(aiGuess) ? aiGuess : exactHeaders.find(h => keywords.some(kw => h.toLowerCase().includes(kw))) || exactHeaders[1] || "";
         const safePriceCol = getRealColumn(config.priceCol, ['price', 'cost', 'rate', 'amt', 'value', '₹', '$', '€', '£']); const safeQtyCol = getRealColumn(config.qtyCol, ['qty', 'quantity', 'stock', 'unit']); const safeNameCol = getRealColumn(config.productCol, ['name', 'product', 'item', 'title', 'desc']); const safeCatCol = getRealColumn(config.catCol, ['cat', 'type', 'group', 'class']);
-
         let totalRev = 0; let validProductCount = 0; const readyToSaveData: any[] = [];
         data.forEach((row: any) => {
           const validPrice = isNaN(parseFloat(String(row[safePriceCol] || "0").replace(/[^\d.]/g, ''))) ? 0 : parseFloat(String(row[safePriceCol] || "0").replace(/[^\d.]/g, ''));
@@ -511,13 +707,21 @@ export default function MasterDashboard() {
   };
 
   const handleLeaveAction = async (id: string, status: string) => { await updateDoc(doc(db, 'leave_requests', id), { status }); const req = leaveRequests.find(l => l.id === id); await logActivity('UPDATE', 'System', `${status} leave request`); setDismissedPopups(prev => [...prev, id]); };
-  const copyToClipboard = (text: string) => { navigator.clipboard.writeText(text); alert("Copied!"); };
+
   const sendRealEmail = async () => { if (!createdAccount) return; setIsSendingEmail(true); try { const response = await fetch('/api/send-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: createdAccount.name, email: createdAccount.email, password: createdAccount.password }) }); const data = await response.json(); if (data.success) { alert("✅ Email sent!"); await logActivity('EMAIL', 'System', `Emailed credentials`); setCreatedAccount(null); } else { alert("❌ Failed."); } } catch { alert("❌ Error connecting to email server."); } finally { setIsSendingEmail(false); } };
   const handleDeleteDoc = async (collectionName: string, id: string) => { if (window.confirm("Are you sure?")) { await deleteDoc(doc(db, collectionName, id)); await logActivity('DELETE', 'System', `Deleted a record.`); } };
 
   const handleStatusChange = async (id: string, newStatus: string) => {
     const leadToUpdate = leads.find(l => l.id === id); if (!leadToUpdate || leadToUpdate.status === newStatus) return;
+
+    if (newStatus === 'Won') {
+      const currentWonRev = analytics.wonRev;
+      const leadValueInSelectedCurrency = leadToUpdate.value * currentRate;
+      if (currentWonRev < monthlyTarget && (currentWonRev + leadValueInSelectedCurrency) >= monthlyTarget) { setShowCelebration(true); }
+    }
+
     await updateDoc(doc(db, 'leads', id), { status: newStatus }); await logActivity('UPDATE', 'Lead', `Moved lead [${leadToUpdate.name}] to ${newStatus}`);
+
     if (newStatus === 'Won' && autoInvoice) {
       if (leadToUpdate.email) {
         try {
@@ -539,12 +743,59 @@ export default function MasterDashboard() {
   const formatAIText = (text: string) => { return text.split('\n').map((line, i) => { const boldedLine = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); return <p key={i} className="mb-2" dangerouslySetInnerHTML={{ __html: boldedLine }} />; }); };
   const formatLogDate = (timestamp: any) => { if (!timestamp) return 'Just now'; const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp); return d.toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' }); };
 
-  if (isAuthChecking) return <div className="flex h-screen items-center justify-center bg-[#0a0a0a] text-zinc-400"><Loader2 className="animate-spin mr-3" size={20} /> Verifying Secure Connection...</div>;
+  const targetProgress = Math.min((analytics.wonRev / (monthlyTarget || 1)) * 100, 100).toFixed(0);
+
+  // 🔥 MAIN LOTTIE LOADER SCREEN 🔥
+  if (isAuthChecking) return (
+    <div className="flex h-screen flex-col items-center justify-center bg-[#0a0a0a] text-zinc-400 relative">
+      <div className="w-80 h-80 md:w-[450px] md:h-[450px] opacity-90">
+        <Lottie animationData={loadingAnimationData} loop={true} />
+      </div>
+      <h2 className="text-blue-500 font-bold tracking-widest uppercase mt-4 animate-pulse text-lg">Securing Connection...</h2>
+    </div>
+  );
 
   return (
     <div className="flex h-screen w-full bg-[#0a0a0a] text-zinc-100 font-sans selection:bg-zinc-800 overflow-hidden relative">
 
-      {/* POPUP FOR LEAVES */}
+      {/* 🔥 LOTTIE TRANSITION SCREEN FOR TABS 🔥 */}
+      <AnimatePresence>
+        {isTransitioning && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[999] flex flex-col items-center justify-center bg-[#0a0a0a] backdrop-blur-md"
+          >
+            <div className="w-72 h-72 md:w-[400px] md:h-[400px] opacity-90">
+              <Lottie animationData={loadingAnimationData} loop={true} />
+            </div>
+            <h2 className="text-blue-500 font-bold tracking-widest uppercase mt-6 animate-pulse text-lg">Loading Module...</h2>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* GAMIFICATION CELEBRATION POPUP */}
+      <AnimatePresence>
+        {showCelebration && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md pointer-events-none">
+            <motion.div initial={{ scale: 0.5, y: 50 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, opacity: 0 }} className="text-center flex flex-col items-center">
+              <motion.div animate={{ y: [0, -30, 0] }} transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }} className="text-9xl mb-6 drop-shadow-[0_0_50px_rgba(250,204,21,0.6)]">🏆</motion.div>
+              <h1 className="text-5xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 to-yellow-600 drop-shadow-2xl mb-4 tracking-tighter">TARGET SMASHED!</h1>
+              <p className="text-xl md:text-2xl text-yellow-100 font-bold bg-yellow-900/40 border border-yellow-500/50 px-6 py-2 rounded-full shadow-[0_0_30px_rgba(250,204,21,0.2)]">You are the MVP! 👑</p>
+              <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                {[...Array(20)].map((_, i) => (
+                  <motion.div key={i} initial={{ y: "100vh", x: "50vw", scale: 0 }} animate={{ y: "-10vh", x: `${Math.random() * 100}vw`, scale: Math.random() * 2 + 1, rotate: Math.random() * 360 }} transition={{ duration: Math.random() * 2 + 2, ease: "easeOut" }} className="absolute text-3xl">
+                    {['🎉', '✨', '💰', '🔥', '🚀'][Math.floor(Math.random() * 5)]}
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* LEAVE POPUP */}
       <AnimatePresence>
         {activePopup && (
           <motion.div initial={{ opacity: 0, y: 50, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.9, x: 100 }} className="fixed bottom-6 right-6 z-[100] w-80 bg-[#161616] border border-emerald-500/30 rounded-2xl shadow-[0_10px_40px_rgba(16,185,129,0.15)] overflow-hidden">
@@ -578,6 +829,8 @@ export default function MasterDashboard() {
           <nav className="p-4 space-y-1">
             {[
               { id: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+              { id: 'Tasks', icon: <ClipboardList size={18} /> },
+              { id: 'Messages', icon: <MessageSquare size={18} /> },
               { id: 'Analytics', icon: <BarChart3 size={18} /> },
               { id: 'Products', icon: <Package size={18} /> },
               { id: 'Team', icon: <Users size={18} /> },
@@ -588,10 +841,13 @@ export default function MasterDashboard() {
             ].map((tab) => {
               if (tab.id === 'Team' && userRole === 'Employee') return null;
               if (tab.id === 'Activity' && userRole === 'Employee') return null;
+              if (tab.id === 'Tasks' && userRole === 'Employee') return null;
               return (
-                <button key={tab.id} onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-zinc-800/80 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'}`}>
+                <button key={tab.id} onClick={() => handleTabChange(tab.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-zinc-800/80 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'}`}>
                   {tab.icon} {tab.id}
                   {tab.id === 'Leaves' && approvalLeaves.filter(l => l.status === 'Pending').length > 0 && (<span className="ml-auto bg-emerald-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded-full">{approvalLeaves.filter(l => l.status === 'Pending').length}</span>)}
+                  {/* 🔥 SMART NOTIFICATION DOT ON MESSAGES TAB 🔥 */}
+                  {tab.id === 'Messages' && hasUnreadMessages && (<span className="ml-auto w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>)}
                 </button>
               )
             })}
@@ -607,19 +863,53 @@ export default function MasterDashboard() {
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] h-full overflow-hidden">
 
-        {/* MOBILE HEADER */}
+        {/* HEADER (MOBILE) */}
         <header className="md:hidden flex h-16 border-b border-zinc-800/60 items-center justify-between px-4 bg-[#0a0a0a] shrink-0">
           <div className="flex items-center gap-3">
             <button onClick={() => setIsMobileMenuOpen(true)} className="text-zinc-400 hover:text-white p-1"> <Menu size={24} /> </button>
             <span className="font-semibold text-zinc-100 text-sm">{activeTab}</span>
           </div>
-          <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700"> <UserIcon size={14} className="text-zinc-300" /> </div>
+          <div className="relative">
+            <button onClick={() => setShowNotifications(!showNotifications)} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700 relative">
+              <Bell size={14} className="text-zinc-300" />
+              {activities.length > 0 && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-pulse border border-[#0a0a0a]" />}
+            </button>
+          </div>
         </header>
 
-        {/* DESKTOP HEADER */}
+        {/* HEADER (DESKTOP) */}
         <header className="hidden md:flex h-16 border-b border-zinc-800/60 items-center justify-between px-8 bg-[#0a0a0a] shrink-0">
           <div className="flex items-center gap-2 text-sm text-zinc-500"><span>Overview</span><span>/</span><span className="text-zinc-100 font-medium">{activeTab}</span></div>
           <div className="flex items-center gap-6">
+
+            {/* NOTIFICATION BELL WITH ROUTING */}
+            <div className="relative">
+              <button onClick={() => setShowNotifications(!showNotifications)} className="text-zinc-400 hover:text-white p-2 relative rounded-full hover:bg-zinc-800 transition-colors">
+                <Bell size={18} />
+                {activities.length > 0 && <span className="absolute top-1.5 right-2 w-2 h-2 bg-red-500 rounded-full animate-pulse border border-[#0a0a0a]" />}
+              </button>
+              <AnimatePresence>
+                {showNotifications && (
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute right-0 mt-2 w-80 bg-[#161616] border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden">
+                    <div className="p-3 border-b border-zinc-800 flex justify-between items-center bg-[#111111]">
+                      <span className="text-sm font-bold text-white flex items-center gap-2"><Bell size={14} className="text-emerald-500" /> Live Activity</span>
+                      <button onClick={() => setShowNotifications(false)} className="text-zinc-500 hover:text-white"><X size={14} /></button>
+                    </div>
+                    <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                      {activities.slice(0, 10).map(act => (
+                        <div key={act.id} onClick={() => handleNotificationClick(act.module)} className="p-3 border-b border-zinc-800/50 hover:bg-[#1a1a1a] transition-colors cursor-pointer group">
+                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1 group-hover:text-emerald-300">{act.module} • {act.action}</p>
+                          <p className="text-xs text-zinc-300 leading-relaxed"><span className="font-bold text-white">{act.userName}</span> {act.description.toLowerCase()}</p>
+                          <p className="text-[9px] text-zinc-500 mt-1">{formatLogDate(act.createdAt)}</p>
+                        </div>
+                      ))}
+                      {activities.length === 0 && <div className="p-4 text-center text-xs text-zinc-500">No new notifications.</div>}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700"><UserIcon size={14} className="text-zinc-300" /></div>
               <div className="text-sm"><p className="font-medium text-zinc-200">{currentUserData?.name || 'Loading...'}</p><p className="text-[10px] text-zinc-500 uppercase tracking-wider">{userRole || 'Verifying'}</p></div>
@@ -631,18 +921,161 @@ export default function MasterDashboard() {
         <div className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-7xl mx-auto h-full flex flex-col">
 
-            {/* 🔥 SETTINGS TAB 🔥 */}
+            {/* MESSAGES / DISCUSSION ROOMS */}
+            {activeTab === 'Messages' && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col md:flex-row h-[calc(100vh-8rem)] md:h-[calc(100vh-12rem)] gap-6">
+
+                {/* Rooms Sidebar */}
+                <div className="w-full md:w-64 flex flex-col gap-3 shrink-0">
+                  <h2 className="text-lg font-bold text-white mb-2 tracking-tight">Channels</h2>
+                  {availableRooms.map(room => (
+                    <button
+                      key={room}
+                      onClick={() => setActiveRoom(room)}
+                      className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all ${activeRoom === room ? `bg-[#161616] border-emerald-500/50 shadow-sm` : 'bg-[#111111] border-zinc-800/60 hover:bg-[#161616]'}`}
+                    >
+                      <span className={`text-lg font-black ${activeRoom === room ? 'text-emerald-400' : 'text-zinc-500'}`}>#</span>
+                      <div>
+                        <h3 className={`font-bold text-sm ${activeRoom === room ? 'text-white' : 'text-zinc-300'}`}>{room}</h3>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Chat Area */}
+                <div className="flex-1 bg-[#111111] border border-zinc-800/60 rounded-2xl shadow-sm overflow-hidden flex flex-col relative">
+                  <div className="px-6 py-4 border-b border-zinc-800/60 flex items-center justify-between bg-[#161616] shrink-0">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center border border-zinc-700 bg-zinc-800">
+                        <span className="text-zinc-400 font-black text-xl">#</span>
+                      </div>
+                      <div>
+                        <h2 className="text-zinc-100 font-bold">{activeRoom}</h2>
+                        <p className="text-xs font-medium flex items-center gap-1 text-emerald-500"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live Discussion</p>
+                      </div>
+                    </div>
+                    {/* CEO AI Briefing Button */}
+                    {userRole === 'CEO' && activeRoom === 'Leadership' && (
+                      <button onClick={handleDropAIDailyBriefing} disabled={isSaving} className="bg-purple-500/10 text-purple-400 hover:bg-purple-500 hover:text-white border border-purple-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                        {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} AI Daily Briefing
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar flex flex-col">
+                    {roomMessages.filter(m => m.room === activeRoom).length === 0 ? (
+                      <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">No messages in #{activeRoom} yet. Start the conversation!</div>
+                    ) : (
+                      roomMessages.filter(m => m.room === activeRoom).map((msg) => {
+                        const isMe = msg.senderId === currentUserData?.uid;
+                        const isSystemAI = msg.senderId === 'ai-master';
+                        return (
+                          <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                            <div className="flex items-center gap-2 mb-1 px-1">
+                              {!isMe && <span className="text-xs font-bold text-zinc-300">{msg.senderName}</span>}
+                              {!isMe && <span className={`text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded border ${isSystemAI ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>{msg.senderRole}</span>}
+                            </div>
+                            <div className={`max-w-[85%] md:max-w-[75%] rounded-2xl p-4 text-sm shadow-sm ${isMe ? 'bg-emerald-600 text-white rounded-tr-sm' :
+                                isSystemAI ? 'bg-zinc-800 border border-purple-500/30 text-zinc-200 rounded-tl-sm' :
+                                  'bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-tl-sm'
+                              }`}>
+                              {isSystemAI ? formatAIText(msg.text) : msg.text}
+                            </div>
+                            <span className="text-[9px] text-zinc-600 mt-1 px-1">{formatLogDate(msg.createdAt)}</span>
+                          </div>
+                        )
+                      })
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  <form onSubmit={handleSendRoomMessage} className="p-4 bg-[#161616] border-t border-zinc-800/60 shrink-0">
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        value={roomMessageInput}
+                        onChange={(e) => setRoomMessageInput(e.target.value)}
+                        placeholder={`Message #${activeRoom}...`}
+                        className="w-full bg-[#0a0a0a] border border-zinc-700 text-zinc-200 rounded-xl pl-4 pr-12 py-3.5 outline-none focus:border-zinc-500 transition-colors text-sm"
+                      />
+                      <button type="submit" disabled={!roomMessageInput.trim()} className="absolute right-2 p-2 bg-zinc-200 hover:bg-white text-black rounded-lg transition-colors disabled:opacity-50"><Send size={16} /></button>
+                    </div>
+                  </form>
+                </div>
+              </motion.div>
+            )}
+
+            {/* TASKS TAB */}
+            {activeTab === 'Tasks' && userRole !== 'Employee' && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
+                  <div>
+                    <h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Delegation Engine</h1>
+                    <p className="text-sm text-zinc-500 mt-1">Assign strategic objectives to your direct subordinates ({targetTaskRole}s).</p>
+                  </div>
+                  <div className="flex items-center gap-3 w-full md:w-auto">
+                    <button onClick={handleGenerateAITasks} disabled={isSaving || eligibleTaskAssignees.length === 0} className="bg-zinc-800 text-emerald-400 hover:bg-zinc-700 border border-zinc-700 px-4 py-2.5 rounded-md text-sm font-bold flex items-center justify-center gap-2 shadow-sm transition-colors w-full sm:w-auto disabled:opacity-50">
+                      {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />} Auto-Generate Strategy
+                    </button>
+                    <button onClick={() => setIsTaskModalOpen(true)} className="bg-white text-black hover:bg-zinc-200 px-4 py-2.5 rounded-md text-sm font-bold flex items-center justify-center gap-2 shadow-sm w-full sm:w-auto">
+                      <Plus size={16} /> New Task
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden mt-8 shadow-sm">
+                  <div className="p-4 border-b border-zinc-800/60 bg-[#161616]">
+                    <h2 className="text-white font-bold text-sm tracking-widest uppercase">Active Objectives</h2>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead>
+                        <tr className="border-b border-zinc-800/60 bg-[#111111]">
+                          <th className="p-4 text-zinc-500 font-medium">Task / Objective</th>
+                          <th className="p-4 text-zinc-500 font-medium">Assigned To</th>
+                          <th className="p-4 text-zinc-500 font-medium">Assigned By</th>
+                          <th className="p-4 text-zinc-500 font-medium text-center">Status</th>
+                          <th className="p-4 text-zinc-500 font-medium text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {relevantTasks.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-zinc-500">No active tasks in the system.</td></tr> :
+                          relevantTasks.map(task => (
+                            <tr key={task.id} className="border-b border-zinc-800/30 hover:bg-[#161616] transition-colors group">
+                              <td className="p-4">
+                                <p className="font-bold text-zinc-200">{task.title}</p>
+                                <p className="text-xs text-zinc-500 truncate max-w-[250px] mt-0.5" title={task.description}>{task.description}</p>
+                              </td>
+                              <td className="p-4 font-medium text-emerald-400">{task.assignedToName} <span className="text-[9px] uppercase border border-emerald-500/30 px-1 rounded ml-1 bg-emerald-500/10 text-emerald-500">{task.assignedToRole}</span></td>
+                              <td className="p-4 text-zinc-400">{task.assignedByName} <span className="text-[9px] uppercase border border-zinc-700 px-1 rounded ml-1 bg-zinc-800">{task.assignedByRole}</span></td>
+                              <td className="p-4 text-center">
+                                <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                    'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                                  }`}>{task.status}</span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <button onClick={() => handleDeleteDoc('tasks', task.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1"><Trash2 size={16} /></button>
+                              </td>
+                            </tr>
+                          ))
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* SETTINGS TAB WITH MONTHLY TARGET ADDED */}
             {activeTab === 'Settings' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-5xl space-y-8 pb-12">
                 <div><h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">System Settings</h1><p className="text-sm text-zinc-500 mt-1">Manage your account, global preferences, and security access.</p></div>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-                  {/* Left Column: Nav */}
                   <div className="space-y-2 md:col-span-1">
                     <button onClick={() => setActiveSettingsTab('Profile')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeSettingsTab === 'Profile' ? 'bg-zinc-800/80 text-emerald-400 border border-zinc-700/50 shadow-sm' : 'text-zinc-400 hover:bg-zinc-800/30 border border-transparent'}`}> <UserIcon size={16} /> Personal Profile </button>
                     <button onClick={() => setActiveSettingsTab('Preferences')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeSettingsTab === 'Preferences' ? 'bg-zinc-800/80 text-emerald-400 border border-zinc-700/50 shadow-sm' : 'text-zinc-400 hover:bg-zinc-800/30 border border-transparent'}`}> <Globe size={16} /> Preferences </button>
                     <button onClick={() => setActiveSettingsTab('Security')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeSettingsTab === 'Security' ? 'bg-zinc-800/80 text-emerald-400 border border-zinc-700/50 shadow-sm' : 'text-zinc-400 hover:bg-zinc-800/30 border border-transparent'}`}> <Lock size={16} /> Security Settings </button>
                   </div>
-                  {/* Right Column: Forms */}
                   <div className="md:col-span-3 space-y-8">
                     {/* FORM 1: PROFILE */}
                     {activeSettingsTab === 'Profile' && (
@@ -663,13 +1096,31 @@ export default function MasterDashboard() {
                       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden shadow-sm">
                         <div className="p-5 border-b border-zinc-800/60 flex items-center gap-3 bg-[#161616]"><Globe size={18} className="text-emerald-400" /><h2 className="text-white font-bold text-sm uppercase tracking-widest">Global System Preferences</h2></div>
                         <div className="p-6 space-y-6">
-                          <div>
-                            <label className="text-xs text-zinc-500 uppercase font-bold mb-2 block">Base Currency</label>
-                            <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full sm:w-1/2 bg-[#1a1a1a] border border-zinc-700 text-white px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer">
-                              <option value="USD ($)">USD ($) - US Dollar</option><option value="INR (₹)">INR (₹) - Indian Rupee</option><option value="EUR (€)">EUR (€) - Euro</option><option value="GBP (£)">GBP (£) - British Pound</option>
-                            </select>
-                            <p className="text-zinc-500 text-[10px] mt-2">Changes will instantly reflect across Dashboard, Invoices, and AI Analytics.</p>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                            <div>
+                              <label className="text-xs text-zinc-500 uppercase font-bold mb-2 block">Base Currency</label>
+                              <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full bg-[#1a1a1a] border border-zinc-700 text-white px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer">
+                                <option value="USD ($)">USD ($) - US Dollar</option><option value="INR (₹)">INR (₹) - Indian Rupee</option><option value="EUR (€)">EUR (€) - Euro</option><option value="GBP (£)">GBP (£) - British Pound</option>
+                              </select>
+                              <p className="text-zinc-500 text-[10px] mt-2">Changes will instantly reflect across Dashboard, Invoices, and AI Analytics.</p>
+                            </div>
+
+                            <div>
+                              <label className="text-xs text-zinc-500 uppercase font-bold mb-2 block flex items-center gap-1">Monthly Revenue Target <Trophy size={10} className="text-yellow-500" /></label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
+                                <input
+                                  type="number"
+                                  value={monthlyTargetRaw}
+                                  onChange={(e) => setMonthlyTargetRaw(Number(e.target.value))}
+                                  className="w-full bg-[#1a1a1a] border border-zinc-700 text-white pl-7 pr-4 py-2.5 rounded-lg outline-none focus:border-yellow-500 text-sm transition-colors"
+                                />
+                              </div>
+                              <p className="text-zinc-500 text-[10px] mt-2">Set in Base USD. Hitting this target unlocks MVP Celebration.</p>
+                            </div>
                           </div>
+
                           <div className="flex items-center justify-between py-4 border-t border-zinc-800/50">
                             <div><p className="text-zinc-200 font-medium text-sm">Automated Invoice Dispatch</p><p className="text-zinc-500 text-xs mt-0.5">Send a secure PDF invoice immediately when a lead is marked as 'Won'.</p></div>
                             <button onClick={() => setAutoInvoice(!autoInvoice)} className={`w-11 h-6 rounded-full transition-colors relative ${autoInvoice ? 'bg-emerald-500' : 'bg-zinc-700'}`}><span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${autoInvoice ? 'right-1' : 'left-1'}`} /></button>
@@ -706,7 +1157,7 @@ export default function MasterDashboard() {
               </motion.div>
             )}
 
-            {/* 🔥 LEAVES TAB 🔥 */}
+            {/* LEAVES TAB */}
             {activeTab === 'Leaves' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4">
@@ -761,7 +1212,7 @@ export default function MasterDashboard() {
               </motion.div>
             )}
 
-            {/* 🔥 ACTIVITY LOG TAB 🔥 */}
+            {/* ACTIVITY LOG TAB */}
             {activeTab === 'Activity' && userRole !== 'Employee' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
@@ -769,22 +1220,24 @@ export default function MasterDashboard() {
                 </div>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="relative flex-1"><Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-zinc-500" /><input type="text" placeholder="Search activities or users..." value={activitySearch} onChange={(e) => setActivitySearch(e.target.value)} className="w-full bg-[#111111] border border-zinc-800/60 text-white pl-10 pr-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm transition-colors" /></div>
-                  <div className="flex gap-3">
-                    <select value={activityFilterAction} onChange={(e) => setActivityFilterAction(e.target.value)} className="bg-[#111111] border border-zinc-800/60 text-zinc-300 px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer w-full sm:w-auto"><option value="All">All Actions</option><option value="CREATE">Create</option><option value="UPDATE">Update</option><option value="DELETE">Delete</option><option value="EMAIL">Email</option><option value="IMPORT">Import</option><option value="EXPORT">Export</option></select>
-                    <select value={activityFilterModule} onChange={(e) => setActivityFilterModule(e.target.value)} className="bg-[#111111] border border-zinc-800/60 text-zinc-300 px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer w-full sm:w-auto"><option value="All">All Modules</option><option value="Lead">Lead</option><option value="Product">Product</option><option value="Team">Team</option><option value="Finance">Finance</option><option value="Analytics">Analytics</option><option value="System">System</option></select>
+                  <div className="flex flex-wrap gap-3">
+                    <div className="flex items-center gap-2 bg-[#111111] border border-zinc-800/60 rounded-lg px-2"><Calendar size={14} className="text-zinc-500 ml-2" /><input type="date" value={activityDateFilter} onChange={(e) => setActivityDateFilter(e.target.value)} className="bg-transparent text-zinc-300 py-2.5 outline-none focus:border-emerald-500 text-sm [color-scheme:dark] cursor-pointer" title="Filter by Date" />{activityDateFilter && (<button onClick={() => setActivityDateFilter('')} className="text-zinc-500 hover:text-white px-2 py-1 transition-colors text-xs font-medium border-l border-zinc-800 ml-1">Clear</button>)}</div>
+                    <select value={activityFilterAction} onChange={(e) => setActivityFilterAction(e.target.value)} className="bg-[#111111] border border-zinc-800/60 text-zinc-300 px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer"><option value="All">All Actions</option><option value="CREATE">Create</option><option value="UPDATE">Update</option><option value="DELETE">Delete</option><option value="EMAIL">Email</option><option value="IMPORT">Import</option><option value="EXPORT">Export</option></select>
+                    <select value={activityFilterModule} onChange={(e) => setActivityFilterModule(e.target.value)} className="bg-[#111111] border border-zinc-800/60 text-zinc-300 px-4 py-2.5 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer"><option value="All">All Modules</option><option value="Lead">Lead</option><option value="Task">Task</option><option value="Product">Product</option><option value="Team">Team</option><option value="Finance">Finance</option><option value="Analytics">Analytics</option><option value="System">System</option></select>
                   </div>
                 </div>
                 <div className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden mt-4 shadow-sm">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm whitespace-nowrap">
-                      <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Timestamp</th><th className="p-4 text-zinc-400 font-medium">User Profile</th><th className="p-4 text-zinc-400 font-medium">Action</th><th className="p-4 text-zinc-400 font-medium">System Module</th><th className="p-4 text-zinc-400 font-medium">Detailed Activity</th></tr></thead>
+                      <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Timestamp</th><th className="p-4 text-zinc-400 font-medium">User Profile</th><th className="p-4 text-zinc-400 font-medium">Action</th><th className="p-4 text-zinc-400 font-medium">System Module</th><th className="p-4 text-zinc-400 font-medium">Detailed Activity</th>{userRole === 'CEO' && <th className="p-4 text-zinc-400 font-medium text-center w-16">Manage</th>}</tr></thead>
                       <tbody>
-                        {filteredActivities.length === 0 ? <tr><td colSpan={5} className="p-8 text-center text-zinc-500">No matching activities found.</td></tr> :
+                        {filteredActivities.length === 0 ? <tr><td colSpan={userRole === 'CEO' ? 6 : 5} className="p-8 text-center text-zinc-500">No matching activities found.</td></tr> :
                           filteredActivities.map(log => (
-                            <tr key={log.id} className="border-b border-zinc-800/30 hover:bg-[#161616] transition-colors">
+                            <tr key={log.id} className="border-b border-zinc-800/30 hover:bg-[#161616] transition-colors group">
                               <td className="p-4 text-zinc-500 font-mono text-[11px] uppercase tracking-wider">{formatLogDate(log.createdAt)}</td><td className="p-4 text-zinc-300 flex items-center gap-2"><UserIcon size={12} className="text-zinc-500" /> {log.userName} <span className="text-[9px] font-bold text-zinc-500 bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded uppercase">{log.userRole}</span></td>
                               <td className="p-4"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${log.action === 'CREATE' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : log.action === 'DELETE' ? 'bg-red-500/10 text-red-400 border-red-500/20' : log.action === 'IMPORT' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : log.action === 'EXPORT' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : log.action === 'EMAIL' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>{log.action}</span></td>
                               <td className="p-4 text-zinc-400 font-medium">{log.module}</td><td className="p-4 text-zinc-300">{log.description}</td>
+                              {userRole === 'CEO' && (<td className="p-4 text-center"><button onClick={() => handleDeleteDoc('activity_logs', log.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1" title="Delete Log"><Trash2 size={16} /></button></td>)}
                             </tr>
                           ))
                         }
@@ -795,11 +1248,10 @@ export default function MasterDashboard() {
               </motion.div>
             )}
 
-            {/* 🔥 AUTOMATION TAB (DYNAMIC ROLE BASED) 🔥 */}
+            {/* AUTOMATION TAB */}
             {activeTab === 'Automation' && (
               <>
                 {userRole === 'CEO' || userRole === 'HR' ? (
-                  /* MULTI-AGENT HUB FOR CEO & HR */
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col md:flex-row h-[calc(100vh-8rem)] md:h-[calc(100vh-12rem)] gap-6">
                     <div className="w-full md:w-72 flex flex-col gap-3 shrink-0">
                       <h2 className="text-lg font-bold text-white mb-2 tracking-tight">AI Agent Hub</h2>
@@ -816,6 +1268,9 @@ export default function MasterDashboard() {
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${AI_AGENTS.find(a => a.id === activeAgentId)?.bg} border-${AI_AGENTS.find(a => a.id === activeAgentId)?.color}-500/20`}><div className={AI_AGENTS.find(a => a.id === activeAgentId)?.text}>{AI_AGENTS.find(a => a.id === activeAgentId)?.icon}</div></div>
                           <div><h2 className="text-zinc-100 font-bold">{AI_AGENTS.find(a => a.id === activeAgentId)?.name}</h2><p className={`text-xs font-medium flex items-center gap-1 ${AI_AGENTS.find(a => a.id === activeAgentId)?.text}`}><span className={`w-1.5 h-1.5 rounded-full ${AI_AGENTS.find(a => a.id === activeAgentId)?.bg.replace('/10', '')} animate-pulse`} /> Live Data Synced</p></div>
                         </div>
+                        <button onClick={handleGenerateAITasks} disabled={isSaving || eligibleTaskAssignees.length === 0} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Give Tasks to Juniors
+                        </button>
                       </div>
                       <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                         {(chatHistories[activeAgentId] || []).map((msg, index) => (
@@ -830,10 +1285,14 @@ export default function MasterDashboard() {
                     </div>
                   </motion.div>
                 ) : (
-                  /* SINGLE AI ASSISTANT FOR MANAGER & EMPLOYEE */
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-12rem)] bg-[#111111] border border-zinc-800/60 rounded-2xl shadow-sm overflow-hidden relative">
                     <div className="px-6 py-4 border-b border-zinc-800/60 flex items-center justify-between bg-[#161616] shrink-0">
                       <div className="flex items-center gap-3"><div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/20"><Bot className="text-emerald-400" size={20} /></div><div><h2 className="text-zinc-100 font-bold">Context-Aware AI Assistant</h2><p className="text-xs text-emerald-500 font-medium flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live Data Synced</p></div></div>
+                      {userRole === 'Manager' && (
+                        <button onClick={handleGenerateAITasks} disabled={isSaving || eligibleTaskAssignees.length === 0} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Give Tasks to Juniors
+                        </button>
+                      )}
                     </div>
                     <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                       {chatMessages.map((msg, index) => (
@@ -850,7 +1309,7 @@ export default function MasterDashboard() {
               </>
             )}
 
-            {/* 🔥 PRODUCTS TAB 🔥 */}
+            {/* PRODUCTS TAB */}
             {activeTab === 'Products' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
@@ -897,7 +1356,7 @@ export default function MasterDashboard() {
               </motion.div>
             )}
 
-            {/* 🔥 TEAM TAB 🔥 */}
+            {/* TEAM TAB */}
             {activeTab === 'Team' && userRole !== 'Employee' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
@@ -933,6 +1392,30 @@ export default function MasterDashboard() {
             {/* DASHBOARD TAB (KANBAN) */}
             {activeTab === 'Dashboard' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+
+                {/* EMPLOYEE MY TASKS WIDGET WITH COMPLETION LOGIC */}
+                {userRole === 'Employee' && relevantTasks.length > 0 && (
+                  <div className="bg-[#111111] border border-blue-500/20 rounded-xl overflow-hidden shadow-sm mb-8">
+                    <div className="p-4 border-b border-zinc-800/60 bg-[#161616] flex items-center justify-between">
+                      <h2 className="text-blue-400 font-bold text-sm tracking-widest uppercase flex items-center gap-2"><ClipboardList size={16} /> My Pending Tasks</h2>
+                    </div>
+                    <div className="p-4 space-y-3">
+                      {relevantTasks.map(task => (
+                        <div key={task.id} className="bg-[#1a1a1a] border border-zinc-800/60 p-4 rounded-lg flex items-center justify-between">
+                          <div>
+                            <p className="font-bold text-zinc-200">{task.title}</p>
+                            <p className="text-xs text-zinc-500 mt-1">{task.description}</p>
+                            <p className="text-[10px] text-zinc-600 mt-2">Assigned by: {task.assignedByName}</p>
+                          </div>
+                          <button onClick={() => handleCompleteTask(task)} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded text-xs font-bold transition-colors">
+                            Mark Complete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
                   <div><h1 className="text-2xl font-semibold text-zinc-100 tracking-tight">Active Pipeline</h1><p className="text-sm text-emerald-500 mt-1 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> {userRole === 'Employee' ? 'Your Assigned Leads' : 'Company Wide Leads'}</p></div>
                   <div className="flex items-center gap-3 w-full md:w-auto">
@@ -962,7 +1445,12 @@ export default function MasterDashboard() {
                                   <div className="flex justify-between items-start mb-3"><div className="pr-4"><h4 className="text-zinc-100 font-bold text-sm leading-tight">{lead.name}</h4><p className="text-zinc-500 text-xs mt-0.5 truncate">{lead.company}</p></div><button onClick={() => handleDeleteDoc('leads', lead.id)} className="text-zinc-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14} /></button></div>
                                   <div className="flex items-center justify-between pt-3 border-t border-zinc-800/50">
                                     <span className="text-zinc-300 font-bold text-sm">{currencySymbol}{(lead.value * currentRate).toLocaleString()}</span>
-                                    <span className="flex items-center gap-1.5 text-[10px] font-medium text-zinc-400 bg-zinc-900 px-2 py-1 rounded border border-zinc-800/50 truncate max-w-[120px]"><UserIcon size={10} className="text-zinc-500 shrink-0" /> {lead.assignedToName?.split(' ')[0] || 'Unassigned'}</span>
+                                    {/* 🔥 MAGIC LINK ICON 🔥 */}
+                                    <div className="flex items-center gap-2">
+                                      <button onClick={() => handleSendTrackingLink(lead.id, lead.name, lead.email || '')} className="text-zinc-500 hover:text-emerald-400 transition-colors p-1" title="Send Magic Client Link"><Send size={14} /></button>
+                                      <button onClick={() => copyTrackingLink(lead.id, lead.name)} className="text-zinc-500 hover:text-blue-400 transition-colors p-1" title="Copy Magic Client Link"><ExternalLink size={14} /></button>
+                                      <span className="flex items-center gap-1.5 text-[10px] font-medium text-zinc-400 bg-zinc-900 px-2 py-1 rounded border border-zinc-800/50 truncate max-w-[90px]"><UserIcon size={10} className="text-zinc-500 shrink-0" /> {lead.assignedToName?.split(' ')[0] || 'Unassigned'}</span>
+                                    </div>
                                   </div>
                                 </motion.div>
                               ))}
@@ -975,14 +1463,20 @@ export default function MasterDashboard() {
                       <div className="bg-[#111111] border border-zinc-800/60 rounded-xl overflow-hidden shadow-sm">
                         <div className="overflow-x-auto">
                           <table className="w-full text-left text-sm whitespace-nowrap">
-                            <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Name</th><th className="p-4 text-zinc-400 font-medium">Organization</th><th className="p-4 text-zinc-400 font-medium">Email</th><th className="p-4 text-zinc-400 font-medium">Assigned To</th><th className="p-4 text-zinc-400 font-medium">Status</th><th className="p-4 text-zinc-400 font-medium text-right">Value</th><th className="p-4 text-zinc-400 font-medium text-center w-16">Action</th></tr></thead>
+                            <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Name</th><th className="p-4 text-zinc-400 font-medium">Organization</th><th className="p-4 text-zinc-400 font-medium">Email</th><th className="p-4 text-zinc-400 font-medium">Assigned To</th><th className="p-4 text-zinc-400 font-medium">Status</th><th className="p-4 text-zinc-400 font-medium text-right">Value</th><th className="p-4 text-zinc-400 font-medium text-center w-24">Action</th></tr></thead>
                             <tbody>
                               {filteredLeads.length === 0 ? <tr><td colSpan={7} className="p-8 text-center text-zinc-500">No leads found matching your search.</td></tr> :
                                 filteredLeads.map(l => (
                                   <tr key={l.id} className="border-b border-zinc-800/30 hover:bg-[#161616] group transition-colors">
                                     <td className="p-4 font-medium text-zinc-200">{l.name}</td><td className="p-4 text-zinc-500">{l.company}</td><td className="p-4 text-zinc-400">{l.email || '-'}</td><td className="p-4 text-zinc-400 font-medium flex items-center gap-2"><UserIcon size={12} /> {l.assignedToName || 'Unassigned'}</td>
                                     <td className="p-4"><select value={l.status} onChange={(e) => handleStatusChange(l.id, e.target.value)} className={`bg-zinc-800/50 text-zinc-300 px-2 py-1.5 rounded text-xs font-medium border border-zinc-700/50 outline-none cursor-pointer hover:bg-zinc-700 transition-colors ${l.status === 'Won' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : ''} ${l.status === 'Lost' ? 'text-red-400 border-red-500/30 bg-red-500/10' : ''}`}><option value="New" className="bg-zinc-900 text-white">New</option><option value="In Progress" className="bg-zinc-900 text-white">In Progress</option><option value="Won" className="bg-zinc-900 text-emerald-400">Won</option><option value="Lost" className="bg-zinc-900 text-red-400">Lost</option></select></td>
-                                    <td className="p-4 text-right text-zinc-300">{currencySymbol}{(l.value * currentRate).toLocaleString()}</td><td className="p-4 text-center"><button onClick={() => handleDeleteDoc('leads', l.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1"><Trash2 size={16} /></button></td>
+                                    <td className="p-4 text-right text-zinc-300">{currencySymbol}{(l.value * currentRate).toLocaleString()}</td>
+                                    {/* 🔥 MAGIC LINK ICON 🔥 */}
+                                    <td className="p-4 text-center flex items-center justify-center gap-2">
+                                      <button onClick={() => handleSendTrackingLink(l.id, l.name, l.email || '')} className="text-zinc-500 hover:text-emerald-400 transition-colors p-1" title="Send Magic Client Link"><Send size={16} /></button>
+                                      <button onClick={() => copyTrackingLink(l.id, l.name)} className="text-zinc-500 hover:text-blue-400 transition-colors p-1" title="Copy Magic Client Link"><ExternalLink size={16} /></button>
+                                      <button onClick={() => handleDeleteDoc('leads', l.id)} className="text-zinc-600 hover:text-red-500 transition-colors md:opacity-0 md:group-hover:opacity-100 p-1"><Trash2 size={16} /></button>
+                                    </td>
                                   </tr>
                                 ))
                               }
@@ -996,7 +1490,7 @@ export default function MasterDashboard() {
               </motion.div>
             )}
 
-            {/* 🔥 ANALYTICS 2.0 TAB 🔥 */}
+            {/* ANALYTICS 2.0 TAB */}
             {activeTab === 'Analytics' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-6">
@@ -1056,14 +1550,8 @@ export default function MasterDashboard() {
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={analytics.graphData} margin={{ left: -20, right: 0 }}>
                           <defs>
-                            <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                              <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                            </linearGradient>
-                            <linearGradient id="colorForecast" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                              <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                            </linearGradient>
+                            <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.3} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} /></linearGradient>
+                            <linearGradient id="colorForecast" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} /><stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} /></linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                           <XAxis dataKey="month" stroke="#52525b" fontSize={10} tickLine={false} axisLine={false} />
@@ -1091,7 +1579,7 @@ export default function MasterDashboard() {
                             {analytics.leaderboard.length === 0 ? <tr><td colSpan={4} className="p-8 text-center text-zinc-500">No performance data yet. Assign leads to see rankings.</td></tr> :
                               analytics.leaderboard.map((emp, idx) => (
                                 <tr key={idx} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
-                                  <td className="p-4 font-bold flex items-center gap-3"><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs ${idx === 0 ? 'bg-yellow-500 text-black shadow-[0_0_10px_rgba(234,179,8,0.5)]' : idx === 1 ? 'bg-zinc-300 text-black' : idx === 2 ? 'bg-orange-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>{idx + 1}</span>{emp.name}</td>
+                                  <td className="p-4 font-bold flex items-center gap-3"><span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs ${idx === 0 ? 'bg-yellow-500 text-black shadow-[0_0_10px_rgba(234,179,8,0.5)]' : idx === 1 ? 'bg-zinc-300 text-black' : idx === 2 ? 'bg-orange-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>{idx + 1}</span>{emp.name}{idx === 0 && emp.revenue > 0 && <span className="ml-2 bg-yellow-500/20 text-yellow-500 text-[9px] px-1.5 py-0.5 rounded border border-yellow-500/30 uppercase tracking-widest">MVP 👑</span>}</td>
                                   <td className="p-4 text-center text-zinc-300 font-medium">{emp.totalLeads}</td>
                                   <td className="p-4 text-center"><span className={`px-2 py-1 rounded-md text-xs font-bold ${emp.winRate > 50 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'}`}>{emp.winRate}%</span></td>
                                   <td className="p-4 text-right font-black text-emerald-500">{currencySymbol}{emp.revenue.toLocaleString()}</td>
@@ -1133,6 +1621,34 @@ export default function MasterDashboard() {
       </main>
 
       {/* 🔥 MODALS 🔥 */}
+
+      {/* Task Modal */}
+      {isTaskModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white flex items-center gap-2"><ClipboardList size={20} className="text-emerald-500" /> Assign New Task</h2><button onClick={() => setIsTaskModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
+            <form onSubmit={handleCreateTask} className="space-y-4">
+              <div>
+                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Task Title</label>
+                <input type="text" required value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm" placeholder="e.g. Call 10 new leads today" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Description</label>
+                <textarea required value={newTask.description} onChange={e => setNewTask({ ...newTask, description: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm min-h-[80px] resize-none" placeholder="Task details..." />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Assign To ({targetTaskRole})</label>
+                <select required value={newTask.assignedToId} onChange={e => { const selectedMember = team.find(m => m.uid === e.target.value); setNewTask({ ...newTask, assignedToId: e.target.value, assignedToName: selectedMember?.name || '', assignedToRole: selectedMember?.role || '' }); }} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer">
+                  <option value="">-- Select {targetTaskRole} --</option>
+                  {eligibleTaskAssignees.map(m => (<option key={m.id} value={m.uid}>{m.name}</option>))}
+                </select>
+                {eligibleTaskAssignees.length === 0 && <p className="text-red-400 text-[10px] mt-1">No {targetTaskRole}s found in the system to assign tasks to.</p>}
+              </div>
+              <button type="submit" disabled={isSaving || eligibleTaskAssignees.length === 0} className="w-full bg-emerald-500 text-black font-black py-3 rounded-lg mt-6 hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Dispatch Task'}</button>
+            </form>
+          </motion.div>
+        </div>
+      )}
 
       {/* Leave Modal */}
       {isLeaveModalOpen && (
@@ -1228,68 +1744,14 @@ export default function MasterDashboard() {
             <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/20"><CheckCircle2 size={32} className="text-emerald-400" /></div>
             <h2 className="text-xl font-bold text-white mb-2">Account Created!</h2><p className="text-sm text-zinc-400 mb-6">Share these credentials securely. They can log in immediately.</p>
             <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4 mb-6 text-left space-y-3">
-              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Email</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="truncate mr-2">{createdAccount.email}</span><button onClick={() => copyToClipboard(createdAccount.email)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
-              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Temporary Password</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="font-mono text-emerald-400 truncate mr-2">{createdAccount.password}</span><button onClick={() => copyToClipboard(createdAccount.password)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
+              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Email</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="truncate mr-2">{createdAccount.email}</span><button onClick={() => handleCopyToClipboard(createdAccount.email)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
+              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Temporary Password</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="font-mono text-emerald-400 truncate mr-2">{createdAccount.password}</span><button onClick={() => handleCopyToClipboard(createdAccount.password)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
             </div>
             <div className="flex flex-col gap-3">
               <button onClick={sendRealEmail} disabled={isSendingEmail} className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-semibold text-sm hover:bg-blue-500 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isSendingEmail ? <Loader2 className="animate-spin" size={16} /> : <Mail size={16} />}{isSendingEmail ? 'Sending Email...' : 'Send via Email'}</button>
               <button onClick={() => setCreatedAccount(null)} className="w-full bg-transparent border border-zinc-700 text-zinc-300 py-2.5 rounded-lg font-semibold text-sm hover:bg-zinc-800 transition-colors">Close</button>
             </div>
           </motion.div>
-        </div>
-      )}
-
-      {/* AI Import Modal */}
-      {showAIModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-[#0c0c0c] border-0 md:border border-zinc-800 w-full h-full md:h-auto md:max-w-5xl md:max-h-[90vh] overflow-y-auto md:rounded-[2.5rem] relative shadow-2xl">
-            <div className="sticky top-0 right-0 z-20 flex justify-end p-4 md:absolute md:top-6 md:right-6 md:p-0 bg-[#0c0c0c]/80 md:bg-transparent backdrop-blur-md md:backdrop-blur-none"><button onClick={() => setShowAIModal(false)} className="text-zinc-500 hover:text-white transition-colors bg-zinc-900 md:bg-zinc-900 p-2 rounded-full"><X size={20} /></button></div>
-            {!aiResult ? (
-              <div className="py-12 md:py-16 text-center space-y-8 p-6 md:p-8">
-                <div className="space-y-2"><h2 className="text-2xl md:text-3xl font-black text-white tracking-tighter">SMART EXCEL IMPORT</h2><p className="text-sm md:text-base text-zinc-500">AI will automatically detect products, <strong className="text-emerald-400">prices</strong>, and generate insights.</p></div>
-
-                <div onClick={() => aiFileInputRef.current?.click()} className="border-2 border-dashed border-zinc-800 rounded-[2rem] p-8 md:p-16 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all cursor-pointer group max-w-2xl mx-auto">
-                  <input type="file" ref={aiFileInputRef} onChange={processBulletproofAI} className="hidden" accept=".xlsx, .csv" />
-                  {isAiProcessing ? (
-                    <div className="space-y-4"><Loader2 className="mx-auto text-emerald-500 animate-spin w-10 h-10 md:w-12 md:h-12" /><p className="text-emerald-400 font-bold animate-pulse text-sm md:text-base">Running Deep AI Analysis...</p></div>
-                  ) : (
-                    <div className="space-y-4"><UploadCloud className="mx-auto text-zinc-600 group-hover:text-emerald-500 transition-colors w-10 h-10 md:w-12 md:h-12" /><p className="text-white font-bold text-sm md:text-base">Click to Upload Excel / CSV</p><p className="text-zinc-600 text-[10px] md:text-xs uppercase tracking-widest font-bold">Any Format, Any Structure</p></div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-6 md:space-y-8 animate-in zoom-in-95 duration-500 p-4 md:p-8">
-                <div className="overflow-x-auto pb-4 custom-scrollbar">
-                  <div id="pdf-report-container" className="bg-[#0c0c0c] p-6 md:p-8 rounded-2xl min-w-[800px]">
-                    <div className="flex items-center gap-4 border-b border-zinc-800 pb-6 mb-6"><div className="p-4 bg-emerald-500/20 rounded-2xl text-emerald-500"><Sparkles /></div><div className="flex-1"><h2 className="text-3xl font-black text-white uppercase">{aiResult.bizName}</h2><p className="text-zinc-500 text-xs font-bold tracking-widest uppercase mt-1">Executive AI Report • <span className="text-emerald-400">{new Date().toLocaleDateString()}</span></p></div></div>
-                    <div className="grid grid-cols-2 gap-4 mb-8">
-                      <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800"><div className="flex items-center justify-between mb-2"><p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Projected Revenue</p><DollarSign size={14} className="text-emerald-500" /></div><p className="text-4xl font-black text-white">{currencySymbol}{aiResult.totalRevenue.toLocaleString()}</p></div>
-                      <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800"><div className="flex items-center justify-between mb-2"><p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Average Unit Price</p><BarChart3 size={14} className="text-emerald-500" /></div><p className="text-4xl font-black text-white">{currencySymbol}{aiResult.avgPrice.toFixed(0)}</p></div>
-                    </div>
-                    <div className="bg-zinc-900/30 p-8 rounded-[2rem] border border-zinc-800 relative overflow-hidden mb-8">
-                      <div className="absolute top-0 right-0 p-6 opacity-5"><Sparkles size={60} /></div><p className="text-emerald-500 text-xs font-black uppercase tracking-[0.2em] mb-6">Strategic AI Insights</p>
-                      <div className="space-y-4">{aiResult.insights.map((ins: string, i: number) => (<div key={i} className="flex gap-4 items-start"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2 shrink-0" /><p className="text-zinc-300 text-sm leading-relaxed">{ins}</p></div>))}</div>
-                    </div>
-                    <div className="border border-zinc-800 rounded-2xl overflow-hidden">
-                      <div className="bg-zinc-900 px-6 py-4 border-b border-zinc-800"><p className="text-white text-sm font-bold uppercase tracking-widest">Top Analyzed Products</p></div>
-                      <table className="w-full text-left text-sm">
-                        <thead><tr className="border-b border-zinc-800/60 bg-[#161616]"><th className="p-4 text-zinc-400 font-medium">Product Name</th><th className="p-4 text-zinc-400 font-medium">Category</th><th className="p-4 text-zinc-400 font-medium text-right">Price</th><th className="p-4 text-zinc-400 font-medium text-center">Stock</th></tr></thead>
-                        <tbody>{aiResult.processedProducts.slice(0, 5).map((p: any, i: number) => (<tr key={i} className="border-b border-zinc-800/30 bg-[#0c0c0c]"><td className="p-4 font-medium text-zinc-200">{p.name}</td><td className="p-4 text-zinc-500"><Tag size={10} className="inline mr-1 text-emerald-500" /> {p.category}</td><td className="p-4 text-right text-emerald-400 font-bold">{currencySymbol}{p.price.toLocaleString()}</td><td className="p-4 text-center text-zinc-300">{p.stock}</td></tr>))}</tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-                  <button onClick={handleSaveAiProductsToDb} disabled={isSaving} className="py-4 px-4 bg-emerald-500 text-black text-sm md:text-base font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-400 transition-all hover:scale-[1.02]">
-                    {isSaving ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />} {isSaving ? "Saving to Database..." : "Save Data to Database"}
-                  </button>
-                  <button onClick={handleExportPDF} disabled={isExporting} className="py-4 px-4 bg-zinc-800 text-white text-sm md:text-base font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all">
-                    {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />} {isExporting ? "Generating PDF..." : "Export Executive Report"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
