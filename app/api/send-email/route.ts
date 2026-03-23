@@ -22,9 +22,9 @@ export async function POST(req: Request) {
         const loginUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
         const mailOptions = {
-            from: `"NEXUS ERP" <${process.env.NEXT_PUBLIC_EMAIL_USER}>`,
+            from: `"COMPANY HANDLER" <${process.env.NEXT_PUBLIC_EMAIL_USER}>`,
             to: email,
-            subject: 'Welcome to NEXUS ERP - Your Account is Ready!',
+            subject: 'Welcome to COMPANY HANDLER - Your Account is Ready!',
             html: `
         <!DOCTYPE html>
         <html>
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
                   <!-- Premium Header -->
                   <tr>
                     <td style="background-color: #0a0a0a; padding: 35px; text-align: center; border-bottom: 4px solid #10b981;">
-                      <h1 style="color: #ffffff; margin: 0; font-size: 26px; letter-spacing: 3px; text-transform: uppercase;">NEXUS ERP</h1>
+                      <h1 style="color: #ffffff; margin: 0; font-size: 26px; letter-spacing: 3px; text-transform: uppercase;">COMPANY HANDLER</h1>
                     </td>
                   </tr>
 
@@ -72,7 +72,7 @@ export async function POST(req: Request) {
                   <!-- Footer -->
                   <tr>
                     <td style="background-color: #fafafa; padding: 25px 30px; text-align: center; border-top: 1px solid #e4e4e7;">
-                      <p style="margin: 0; font-size: 12px; color: #a1a1aa;">This is an automated message from the NEXUS Management System. Please do not reply to this email.</p>
+                      <p style="margin: 0; font-size: 12px; color: #a1a1aa;">This is an automated message from the COMPANY HANDLER Management System. Please do not reply to this email.</p>
                     </td>
                   </tr>
 

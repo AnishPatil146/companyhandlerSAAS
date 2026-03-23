@@ -57,7 +57,7 @@ export default function LoginPage() {
                     >
                         <ShieldCheck className="text-black" size={24} />
                     </motion.div>
-                    <h1 className="text-2xl font-semibold tracking-tight text-white">Welcome to NexusCRM</h1>
+                    <h1 className="text-2xl font-semibold tracking-tight text-white">Welcome to COMPANY HANDLER</h1>
                     <p className="text-sm text-zinc-500 mt-2">Enter your credentials to access the terminal.</p>
                 </div>
 

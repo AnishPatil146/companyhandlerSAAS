@@ -99,7 +99,7 @@ export default function AIAnalyzerPage() {
             <aside className="w-64 border-r border-zinc-900 p-6 hidden md:flex flex-col gap-8">
                 <div className="flex items-center gap-3 px-2">
                     <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-black font-black">N</div>
-                    <span className="text-white font-bold tracking-tighter text-xl">NEXUS AI</span>
+                    <span className="text-white font-bold tracking-tighter text-xl">COMPANY HANDLER AI</span>
                 </div>
 
                 <nav className="flex flex-col gap-2">
