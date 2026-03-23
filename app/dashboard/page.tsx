@@ -1,5 +1,5 @@
 "use client";
-
+import { Analytics } from "@vercel/analytics/next"
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
@@ -976,8 +976,8 @@ export default function MasterDashboard() {
                               {!isMe && <span className={`text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded border ${isSystemAI ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>{msg.senderRole}</span>}
                             </div>
                             <div className={`max-w-[85%] md:max-w-[75%] rounded-2xl p-4 text-sm shadow-sm ${isMe ? 'bg-emerald-600 text-white rounded-tr-sm' :
-                                isSystemAI ? 'bg-zinc-800 border border-purple-500/30 text-zinc-200 rounded-tl-sm' :
-                                  'bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-tl-sm'
+                              isSystemAI ? 'bg-zinc-800 border border-purple-500/30 text-zinc-200 rounded-tl-sm' :
+                                'bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-tl-sm'
                               }`}>
                               {isSystemAI ? formatAIText(msg.text) : msg.text}
                             </div>
@@ -1050,7 +1050,7 @@ export default function MasterDashboard() {
                               <td className="p-4 text-zinc-400">{task.assignedByName} <span className="text-[9px] uppercase border border-zinc-700 px-1 rounded ml-1 bg-zinc-800">{task.assignedByRole}</span></td>
                               <td className="p-4 text-center">
                                 <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                                    'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                                  'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
                                   }`}>{task.status}</span>
                               </td>
                               <td className="p-4 text-center">
