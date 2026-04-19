@@ -3,8 +3,8 @@
 // 1. Import the component
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, ArrowRight, Loader2, ShieldCheck, AlertCircle } from 'lucide-react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { Mail, Lock, ArrowRight, Loader2, ShieldCheck, AlertCircle, Users, LayoutDashboard, User as UserIcon } from 'lucide-react';
+import { signInWithEmailAndPassword, fetchSignInMethodsForEmail } from 'firebase/auth';
 import { auth } from '@/lib/firebase'; // Ya '../lib/firebase' agar error aaye
 import { useRouter } from 'next/navigation';
 
@@ -15,12 +15,29 @@ export default function LoginPage() {
     const [errorMsg, setErrorMsg] = useState('');
     const router = useRouter();
 
+    const handleDemoLogin = (role: string) => {
+        localStorage.setItem('demoRole', role);
+        router.push('/dashboard');
+    };
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
         setErrorMsg(''); // Purane errors clear karne ke liye
 
         try {
+            // Check if email exists
+            try {
+                const signInMethods = await fetchSignInMethodsForEmail(auth, email);
+                if (signInMethods.length === 0) {
+                    setErrorMsg("Access Denied. Email address not found on server.");
+                    setIsLoading(false);
+                    return;
+                }
+            } catch (err) {
+                // Ignore if Email Enumeration Protection is enabled
+            }
+
             // FIREBASE THE REAL MAGIC
             await signInWithEmailAndPassword(auth, email, password);
 
@@ -149,6 +166,25 @@ export default function LoginPage() {
                             </button>
                         </motion.div>
                     </form>
+
+                    {/* DEMO LOGIN SECTION */}
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.6 }}
+                        className="mt-6 pt-6 border-t border-zinc-800/60"
+                    >
+                        <div className="flex items-center justify-center gap-2 mb-4">
+                            <span className="w-full h-px bg-zinc-800/60"></span>
+                            <span className="text-[11px] text-zinc-500 uppercase font-semibold whitespace-nowrap">Try Demo</span>
+                            <span className="w-full h-px bg-zinc-800/60"></span>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => handleDemoLogin('HR')} className="flex-1 bg-[#1a1a1a] hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-500 transition py-2.5 rounded-lg text-xs font-semibold text-zinc-300 shadow-sm flex items-center justify-center gap-1.5"><Users size={14} /> HR</button>
+                            <button onClick={() => handleDemoLogin('Manager')} className="flex-1 bg-[#1a1a1a] hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-500 transition py-2.5 rounded-lg text-xs font-semibold text-zinc-300 shadow-sm flex items-center justify-center gap-1.5"><LayoutDashboard size={14} /> Manager</button>
+                            <button onClick={() => handleDemoLogin('Employee')} className="flex-1 bg-[#1a1a1a] hover:bg-zinc-800 border border-zinc-700/50 hover:border-zinc-500 transition py-2.5 rounded-lg text-xs font-semibold text-zinc-300 shadow-sm flex items-center justify-center gap-1.5"><UserIcon size={14} /> Employee</button>
+                        </div>
+                    </motion.div>
                 </div>
             </motion.div>
         </div>

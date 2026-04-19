@@ -221,6 +221,15 @@ export default function MasterDashboard() {
   useEffect(() => {
     let unsubscribeUser: (() => void) | null = null;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      const demoRole = localStorage.getItem('demoRole');
+      if (demoRole) {
+        setUserRole(demoRole);
+        setCurrentUserData({ name: `Demo ${demoRole}`, role: demoRole, uid: `demo_${demoRole.toLowerCase()}` });
+        setProfileName(`Demo ${demoRole}`);
+        setTimeout(() => setIsAuthChecking(false), 800);
+        return;
+      }
+
       if (!user) { router.push('/'); } else {
         const q = query(collection(db, 'company_team'), where('uid', '==', user.uid));
         unsubscribeUser = onSnapshot(q, (snapshot) => {
@@ -410,24 +419,30 @@ export default function MasterDashboard() {
 
       let chatFeedback = `I have generated and assigned the following strategic tasks to the **${targetTaskRole}s**:\n\n`;
 
+      const isDemo = !!localStorage.getItem('demoRole');
+
       for (const t of generated) {
         const randomAssignee = eligibleTaskAssignees.length > 0 ? eligibleTaskAssignees[Math.floor(Math.random() * eligibleTaskAssignees.length)] : null;
-        await addDoc(collection(db, 'tasks'), {
-          title: t.title,
-          description: t.description,
-          assignedById: currentUserData?.uid || '',
-          assignedByName: currentUserData?.name || 'System',
-          assignedByRole: userRole,
-          assignedToId: randomAssignee?.uid || '',
-          assignedToName: randomAssignee?.name || `Unassigned ${targetTaskRole}`,
-          assignedToRole: targetTaskRole,
-          status: 'Pending',
-          createdAt: serverTimestamp()
-        });
+        if (!isDemo) {
+          await addDoc(collection(db, 'tasks'), {
+            title: t.title,
+            description: t.description,
+            assignedById: currentUserData?.uid || '',
+            assignedByName: currentUserData?.name || 'System',
+            assignedByRole: userRole,
+            assignedToId: randomAssignee?.uid || '',
+            assignedToName: randomAssignee?.name || `Unassigned ${targetTaskRole}`,
+            assignedToRole: targetTaskRole,
+            status: 'Pending',
+            createdAt: serverTimestamp()
+          });
+        }
         chatFeedback += `- **${t.title}** (Assigned to: ${randomAssignee?.name || 'Unassigned'})\n`;
       }
 
-      await logActivity('CREATE', 'Task', `AI Auto-Generated 3 strategy tasks for ${targetTaskRole}s.`);
+      if (!isDemo) {
+        await logActivity('CREATE', 'Task', `AI Auto-Generated 3 strategy tasks for ${targetTaskRole}s.`);
+      }
 
       if (userRole === 'CEO' || userRole === 'HR') {
         setChatHistories(prev => ({ ...prev, [activeAgentId]: [...(prev[activeAgentId] || []), { role: 'ai', content: chatFeedback }] }));
@@ -573,10 +588,15 @@ export default function MasterDashboard() {
     };
   }, [leads, timeRange, products, currentRate]);
 
-  const handleLogout = async () => { try { await signOut(auth); router.push('/'); } catch (error) { console.error(error); } };
+  const handleLogout = async () => { try { localStorage.removeItem('demoRole'); await signOut(auth); router.push('/'); } catch (error) { console.error(error); } };
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!currentUserData?.docId) { alert("⚠️ Real DB updates require a registered Team Member account."); return; }
+    e.preventDefault(); 
+    if (!currentUserData?.docId && !localStorage.getItem('demoRole')) { alert("⚠️ Real DB updates require a registered Team Member account."); return; }
+    if (localStorage.getItem('demoRole')) { alert("✅ Profile updated successfully! (Demo Mode)"); return; }
+    
+    if (!currentUserData?.docId) return;
+
     setIsSaving(true);
     try { await updateDoc(doc(db, 'company_team', currentUserData.docId), { name: profileName }); await logActivity('UPDATE', 'System', `Updated personal profile name to ${profileName}`); alert("✅ Profile updated successfully!"); } catch (err) { alert("Failed to update profile: " + err); } finally { setIsSaving(false); }
   };
@@ -1268,7 +1288,7 @@ export default function MasterDashboard() {
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${AI_AGENTS.find(a => a.id === activeAgentId)?.bg} border-${AI_AGENTS.find(a => a.id === activeAgentId)?.color}-500/20`}><div className={AI_AGENTS.find(a => a.id === activeAgentId)?.text}>{AI_AGENTS.find(a => a.id === activeAgentId)?.icon}</div></div>
                           <div><h2 className="text-zinc-100 font-bold">{AI_AGENTS.find(a => a.id === activeAgentId)?.name}</h2><p className={`text-xs font-medium flex items-center gap-1 ${AI_AGENTS.find(a => a.id === activeAgentId)?.text}`}><span className={`w-1.5 h-1.5 rounded-full ${AI_AGENTS.find(a => a.id === activeAgentId)?.bg.replace('/10', '')} animate-pulse`} /> Live Data Synced</p></div>
                         </div>
-                        <button onClick={handleGenerateAITasks} disabled={isSaving || eligibleTaskAssignees.length === 0} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                        <button onClick={handleGenerateAITasks} disabled={isSaving} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
                           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Give Tasks to Juniors
                         </button>
                       </div>
@@ -1289,7 +1309,7 @@ export default function MasterDashboard() {
                     <div className="px-6 py-4 border-b border-zinc-800/60 flex items-center justify-between bg-[#161616] shrink-0">
                       <div className="flex items-center gap-3"><div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/20"><Bot className="text-emerald-400" size={20} /></div><div><h2 className="text-zinc-100 font-bold">Context-Aware AI Assistant</h2><p className="text-xs text-emerald-500 font-medium flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live Data Synced</p></div></div>
                       {userRole === 'Manager' && (
-                        <button onClick={handleGenerateAITasks} disabled={isSaving || eligibleTaskAssignees.length === 0} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                        <button onClick={handleGenerateAITasks} disabled={isSaving} className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50">
                           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Give Tasks to Juniors
                         </button>
                       )}
