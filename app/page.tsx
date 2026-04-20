@@ -1,19 +1,31 @@
 "use client";
 
 // 1. Import the component
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, ArrowRight, Loader2, ShieldCheck, AlertCircle, Users, LayoutDashboard, User as UserIcon } from 'lucide-react';
-import { signInWithEmailAndPassword, fetchSignInMethodsForEmail } from 'firebase/auth';
+import { signInWithEmailAndPassword, fetchSignInMethodsForEmail, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '@/lib/firebase'; // Ya '../lib/firebase' agar error aaye
 import { useRouter } from 'next/navigation';
+
+import { FloatingBookingWidget } from '@/app/components/FloatingBookingWidget';
+import { BookingModal } from '@/app/components/modals/BookingModal';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
+    const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
     const router = useRouter();
+
+    useEffect(() => {
+        // Automatically pop open the booking modal after 2.5 seconds
+        const timer = setTimeout(() => {
+            setIsBookingModalOpen(true);
+        }, 2500);
+        return () => clearTimeout(timer);
+    }, []);
 
     const handleDemoLogin = (role: string) => {
         localStorage.setItem('demoRole', role);
@@ -30,8 +42,9 @@ export default function LoginPage() {
             try {
                 const signInMethods = await fetchSignInMethodsForEmail(auth, email);
                 if (signInMethods.length === 0) {
-                    setErrorMsg("Access Denied. Email address not found on server.");
-                    setIsLoading(false);
+                    // 🚀 Auto-Registration Magic: Instead of denying access, create the account!
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    router.push('/dashboard');
                     return;
                 }
             } catch (err) {
@@ -64,6 +77,21 @@ export default function LoginPage() {
                 transition={{ duration: 0.5, ease: "easeOut" }}
                 className="w-full max-w-md relative z-10"
             >
+                {/* Promo Banner */}
+                <motion.div 
+                    initial={{ opacity: 0, y: -20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.8, type: "spring", stiffness: 200 }}
+                    onClick={() => setIsBookingModalOpen(true)}
+                    className="w-full bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 cursor-pointer rounded-xl p-4 mb-6 flex items-center justify-between group transition-colors"
+                >
+                    <div>
+                        <p className="text-sm font-bold text-emerald-400">Want to see the source code in action?</p>
+                        <p className="text-[11px] text-zinc-400 mt-1 uppercase tracking-wider font-semibold">Book a free 1-on-1 strategy session.</p>
+                    </div>
+                    <ArrowRight size={18} className="text-emerald-500 group-hover:translate-x-1 transition-transform" />
+                </motion.div>
+
                 {/* Brand Header */}
                 <div className="flex flex-col items-center mb-8">
                     <motion.div
@@ -176,7 +204,10 @@ export default function LoginPage() {
                     >
                         <div className="flex items-center justify-center gap-2 mb-4">
                             <span className="w-full h-px bg-zinc-800/60"></span>
-                            <span className="text-[11px] text-zinc-500 uppercase font-semibold whitespace-nowrap">Try Demo</span>
+                            <span className="text-[11px] text-emerald-400/90 uppercase font-semibold whitespace-nowrap flex items-center">
+                                Try Demo
+                                <span className="inline-block w-1 h-3 ml-1.5 bg-emerald-400 animate-pulse"></span>
+                            </span>
                             <span className="w-full h-px bg-zinc-800/60"></span>
                         </div>
                         <div className="flex gap-2">
@@ -187,6 +218,9 @@ export default function LoginPage() {
                     </motion.div>
                 </div>
             </motion.div>
+
+            <FloatingBookingWidget onClick={() => setIsBookingModalOpen(true)} />
+            <BookingModal isOpen={isBookingModalOpen} onClose={() => setIsBookingModalOpen(false)} />
         </div>
     );
 }

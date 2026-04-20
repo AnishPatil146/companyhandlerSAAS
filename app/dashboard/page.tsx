@@ -29,6 +29,14 @@ import Lottie from "lottie-react";
 // ⚠️ MAKE SURE YOUR JSON FILE IS NAMED 'animation.json' AND PLACED IN THE SAME FOLDER ⚠️
 import loadingAnimationData from "./animation.json";
 
+// 🔥 MODAL IMPORTS 🔥
+import { TaskModal } from '../components/modals/TaskModal';
+import { LeaveModal } from '../components/modals/LeaveModal';
+import { LeadModal } from '../components/modals/LeadModal';
+import { ProductModal } from '../components/modals/ProductModal';
+import { TeamModal } from '../components/modals/TeamModal';
+import { AccountCreatedModal } from '../components/modals/AccountCreatedModal';
+
 // 📝 Interfaces
 interface Lead { id: string; name: string; company: string; email?: string; status: string; value: number; assignedToId?: string; assignedToName?: string; createdAt?: any; }
 interface MonthlyData { month: string; revenue: number; churn: number; target: number; forecast?: number; }
@@ -219,17 +227,17 @@ export default function MasterDashboard() {
   }, [showCelebration]);
 
   useEffect(() => {
+    const demoRole = localStorage.getItem('demoRole');
+    if (demoRole) {
+      setUserRole(demoRole);
+      setCurrentUserData({ name: `Demo ${demoRole}`, role: demoRole, uid: `demo_${demoRole.toLowerCase()}` });
+      setProfileName(`Demo ${demoRole}`);
+      setTimeout(() => setIsAuthChecking(false), 800);
+      return;
+    }
+
     let unsubscribeUser: (() => void) | null = null;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      const demoRole = localStorage.getItem('demoRole');
-      if (demoRole) {
-        setUserRole(demoRole);
-        setCurrentUserData({ name: `Demo ${demoRole}`, role: demoRole, uid: `demo_${demoRole.toLowerCase()}` });
-        setProfileName(`Demo ${demoRole}`);
-        setTimeout(() => setIsAuthChecking(false), 800);
-        return;
-      }
-
       if (!user) { router.push('/'); } else {
         const q = query(collection(db, 'company_team'), where('uid', '==', user.uid));
         unsubscribeUser = onSnapshot(q, (snapshot) => {
@@ -411,11 +419,21 @@ export default function MasterDashboard() {
   const handleGenerateAITasks = async () => {
     setIsSaving(true);
     try {
-      const prompt = `Act as the ${userRole} of a company. Based on a CRM dashboard context, generate exactly 3 strategic tasks to assign to the ${targetTaskRole}s. Return ONLY a valid JSON array like this: [{"title": "task title", "description": "short description"}]`;
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const res = await model.generateContent(prompt);
-      const text = res.response.text().replace(/```json|```/g, "").trim();
-      const generated = JSON.parse(text);
+      let generated: {title: string, description: string}[] = [];
+      try {
+        const prompt = `Act as the ${userRole} of a company. Based on a CRM dashboard context, generate exactly 3 strategic tasks to assign to the ${targetTaskRole}s. Return ONLY a valid JSON array like this: [{"title": "task title", "description": "short description"}]`;
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const res = await model.generateContent(prompt);
+        const text = res.response.text().replace(/```json|```/g, "").trim();
+        generated = JSON.parse(text);
+      } catch (aiErr) {
+        console.warn("AI generation failed. Using fallback tasks.", aiErr);
+        generated = [
+          { title: `Optimize ${targetTaskRole} Workflows`, description: `Review and optimize current workflows to increase efficiency.` },
+          { title: `Quarterly Goal Review`, description: `Ensure all targets are being met and adjust strategies if necessary.` },
+          { title: `Team Knowledge Sharing`, description: `Organize a session to share best practices among the team.` }
+        ];
+      }
 
       let chatFeedback = `I have generated and assigned the following strategic tasks to the **${targetTaskRole}s**:\n\n`;
 
@@ -452,7 +470,11 @@ export default function MasterDashboard() {
 
       if (activeTab !== 'Automation') { handleTabChange('Automation'); }
 
-    } catch (err) { alert("AI Task generation failed. Check API key or data format."); } finally { setIsSaving(false); }
+    } catch (err) { 
+      console.error("AI Task Generation Process Error:", err); 
+    } finally { 
+      setIsSaving(false); 
+    }
   };
 
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -1642,138 +1664,65 @@ export default function MasterDashboard() {
 
       {/* 🔥 MODALS 🔥 */}
 
-      {/* Task Modal */}
-      {isTaskModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white flex items-center gap-2"><ClipboardList size={20} className="text-emerald-500" /> Assign New Task</h2><button onClick={() => setIsTaskModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
-            <form onSubmit={handleCreateTask} className="space-y-4">
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Task Title</label>
-                <input type="text" required value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm" placeholder="e.g. Call 10 new leads today" />
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Description</label>
-                <textarea required value={newTask.description} onChange={e => setNewTask({ ...newTask, description: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm min-h-[80px] resize-none" placeholder="Task details..." />
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Assign To ({targetTaskRole})</label>
-                <select required value={newTask.assignedToId} onChange={e => { const selectedMember = team.find(m => m.uid === e.target.value); setNewTask({ ...newTask, assignedToId: e.target.value, assignedToName: selectedMember?.name || '', assignedToRole: selectedMember?.role || '' }); }} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 text-sm appearance-none cursor-pointer">
-                  <option value="">-- Select {targetTaskRole} --</option>
-                  {eligibleTaskAssignees.map(m => (<option key={m.id} value={m.uid}>{m.name}</option>))}
-                </select>
-                {eligibleTaskAssignees.length === 0 && <p className="text-red-400 text-[10px] mt-1">No {targetTaskRole}s found in the system to assign tasks to.</p>}
-              </div>
-              <button type="submit" disabled={isSaving || eligibleTaskAssignees.length === 0} className="w-full bg-emerald-500 text-black font-black py-3 rounded-lg mt-6 hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Dispatch Task'}</button>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      <TaskModal
+        isOpen={isTaskModalOpen}
+        onClose={() => setIsTaskModalOpen(false)}
+        onSubmit={handleCreateTask}
+        newTask={newTask}
+        setNewTask={setNewTask}
+        targetTaskRole={targetTaskRole}
+        eligibleTaskAssignees={eligibleTaskAssignees}
+        team={team}
+        isSaving={isSaving}
+      />
 
-      {/* Leave Modal */}
-      {isLeaveModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white flex items-center gap-2"><Coffee size={20} className="text-emerald-500" /> Request Time Off</h2><button onClick={() => setIsLeaveModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
-            <form onSubmit={handleSubmitLeave} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Start Date</label><input type="date" required value={leaveForm.startDate} onChange={e => setLeaveForm({ ...leaveForm, startDate: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm [color-scheme:dark]" /></div>
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">End Date</label><input type="date" required value={leaveForm.endDate} onChange={e => setLeaveForm({ ...leaveForm, endDate: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm [color-scheme:dark]" /></div>
-              </div>
-              <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block flex items-center gap-1">Reason <Sparkles size={10} className="text-emerald-500" /></label><textarea required value={leaveForm.reason} onChange={e => setLeaveForm({ ...leaveForm, reason: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-emerald-500 transition-all text-sm min-h-[100px] resize-none" placeholder="Provide details. AI will summarize this for your manager..." /></div>
-              <button type="submit" disabled={isSaving} className="w-full bg-emerald-500 text-black font-black py-3 rounded-lg mt-6 hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Submit Request'}</button>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      <LeaveModal
+        isOpen={isLeaveModalOpen}
+        onClose={() => setIsLeaveModalOpen(false)}
+        onSubmit={handleSubmitLeave}
+        leaveForm={leaveForm}
+        setLeaveForm={setLeaveForm}
+        isSaving={isSaving}
+      />
 
-      {/* Lead Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white">Deploy New Lead</h2><button onClick={() => setIsModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
-            <form onSubmit={handleAddLead} className="space-y-4">
-              <input type="text" required value={newLead.name} onChange={e => setNewLead({ ...newLead, name: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Contact Name" />
-              <input type="text" required value={newLead.company} onChange={e => setNewLead({ ...newLead, company: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Organization" />
-              <input type="email" value={newLead.email} onChange={e => setNewLead({ ...newLead, email: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder="Client Email (Optional - triggers auto welcome)" />
-              <input type="number" required value={newLead.value} onChange={e => setNewLead({ ...newLead, value: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 transition-all text-sm" placeholder={`Value (${currencySymbol})`} />
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Assign To (Optional)</label>
-                <select value={newLead.assignedToId} onChange={e => { const selectedMember = team.find(m => m.uid === e.target.value); setNewLead({ ...newLead, assignedToId: e.target.value, assignedToName: selectedMember?.name || 'Unassigned' }); }} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm appearance-none cursor-pointer">
-                  <option value="">-- Auto-Assign to Me --</option>{team.map(m => (<option key={m.id} value={m.uid}>{m.name} ({m.role})</option>))}
-                </select>
-              </div>
-              <button type="submit" disabled={isSaving} className="w-full bg-emerald-500 text-black font-black py-3 rounded-lg mt-6 hover:bg-emerald-400 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Deploy & Assign'}</button>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      <LeadModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleAddLead}
+        newLead={newLead}
+        setNewLead={setNewLead}
+        team={team}
+        currencySymbol={currencySymbol}
+        isSaving={isSaving}
+      />
 
-      {/* Product Modal */}
-      {isProductModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white">Add New Product</h2><button onClick={() => setIsProductModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
-            <form onSubmit={handleAddProduct} className="space-y-4">
-              <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Product Name</label><input type="text" required value={newProduct.name} onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="e.g. Enterprise License" /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Selling Price ({currencySymbol})</label><input type="number" required value={newProduct.price} onChange={e => setNewProduct({ ...newProduct, price: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="0.00" /></div>
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Market Price ({currencySymbol})</label><input type="number" required value={newProduct.marketPrice} onChange={e => setNewProduct({ ...newProduct, marketPrice: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="0.00" /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Stock / Units</label><input type="number" required value={newProduct.stock} onChange={e => setNewProduct({ ...newProduct, stock: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="100" /></div>
-                <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Market Share (%)</label><input type="number" required value={newProduct.marketShare} onChange={e => setNewProduct({ ...newProduct, marketShare: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="e.g. 45" /></div>
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Category</label>
-                <select value={newProduct.category} onChange={e => setNewProduct({ ...newProduct, category: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm appearance-none">
-                  <option value="Software">Software License</option><option value="Hardware">Hardware / Equipment</option><option value="Service">Consulting Service</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2 mt-2"><input type="checkbox" id="trending" checked={newProduct.isTrending} onChange={e => setNewProduct({ ...newProduct, isTrending: e.target.checked })} className="rounded bg-zinc-800 border-zinc-700" /><label htmlFor="trending" className="text-sm text-zinc-400 cursor-pointer">Mark as Trending Fire 🔥</label></div>
-              <button type="submit" disabled={isSaving} className="w-full bg-white text-black py-3 rounded-lg font-medium mt-6 hover:bg-zinc-200 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'List Product'}</button>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      <ProductModal
+        isOpen={isProductModalOpen}
+        onClose={() => setIsProductModalOpen(false)}
+        onSubmit={handleAddProduct}
+        newProduct={newProduct}
+        setNewProduct={setNewProduct}
+        currencySymbol={currencySymbol}
+        isSaving={isSaving}
+      />
 
-      {/* Team Modal */}
-      {isTeamModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#111111] border border-zinc-800 p-6 md:p-8 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-semibold text-white">Register New Account</h2><button onClick={() => setIsTeamModalOpen(false)} className="text-zinc-500 hover:text-white transition-colors"><X size={20} /></button></div>
-            <form onSubmit={handleAddMember} className="space-y-4">
-              <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Full Name</label><input type="text" required value={newMember.name} onChange={e => setNewMember({ ...newMember, name: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="e.g. Rahul Sharma" /></div>
-              <div><label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Work Email</label><input type="email" required value={newMember.email} onChange={e => setNewMember({ ...newMember, email: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm" placeholder="rahul@company.com" /></div>
-              <div>
-                <label className="text-xs text-zinc-500 uppercase font-medium mb-1 block">Assign Role</label>
-                <select value={newMember.role} onChange={e => setNewMember({ ...newMember, role: e.target.value })} className="w-full bg-[#1a1a1a] border border-zinc-800 text-white px-4 py-3 rounded-lg outline-none focus:border-zinc-500 text-sm appearance-none">
-                  {userRole === 'CEO' && (<><option value="CEO">CEO</option><option value="Manager">Manager</option><option value="HR">HR</option></>)}<option value="Employee">Employee</option>
-                </select>
-              </div>
-              <button type="submit" disabled={isSaving} className="w-full bg-white text-black py-3 rounded-lg font-medium mt-6 hover:bg-zinc-200 transition-colors flex justify-center items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={18} /> : 'Create Account'}</button>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      <TeamModal
+        isOpen={isTeamModalOpen}
+        onClose={() => setIsTeamModalOpen(false)}
+        onSubmit={handleAddMember}
+        newMember={newMember}
+        setNewMember={setNewMember}
+        userRole={userRole}
+        isSaving={isSaving}
+      />
 
-      {/* Account Created Modal */}
-      {createdAccount && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="bg-[#111111] border border-emerald-500/30 p-6 md:p-8 rounded-2xl w-full max-w-sm shadow-[0_0_40px_rgba(16,185,129,0.1)] text-center">
-            <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/20"><CheckCircle2 size={32} className="text-emerald-400" /></div>
-            <h2 className="text-xl font-bold text-white mb-2">Account Created!</h2><p className="text-sm text-zinc-400 mb-6">Share these credentials securely. They can log in immediately.</p>
-            <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4 mb-6 text-left space-y-3">
-              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Email</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="truncate mr-2">{createdAccount.email}</span><button onClick={() => handleCopyToClipboard(createdAccount.email)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
-              <div><p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Temporary Password</p><div className="flex items-center justify-between bg-[#1a1a1a] p-2 rounded text-sm text-zinc-200"><span className="font-mono text-emerald-400 truncate mr-2">{createdAccount.password}</span><button onClick={() => handleCopyToClipboard(createdAccount.password)} className="text-zinc-500 hover:text-white shrink-0"><Copy size={14} /></button></div></div>
-            </div>
-            <div className="flex flex-col gap-3">
-              <button onClick={sendRealEmail} disabled={isSendingEmail} className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-semibold text-sm hover:bg-blue-500 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{isSendingEmail ? <Loader2 className="animate-spin" size={16} /> : <Mail size={16} />}{isSendingEmail ? 'Sending Email...' : 'Send via Email'}</button>
-              <button onClick={() => setCreatedAccount(null)} className="w-full bg-transparent border border-zinc-700 text-zinc-300 py-2.5 rounded-lg font-semibold text-sm hover:bg-zinc-800 transition-colors">Close</button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+      <AccountCreatedModal
+        account={createdAccount}
+        onClose={() => setCreatedAccount(null)}
+        onSendEmail={sendRealEmail}
+        isSendingEmail={isSendingEmail}
+        onCopyToClipboard={handleCopyToClipboard}
+      />
 
       <style dangerouslySetInnerHTML={{
         __html: `
