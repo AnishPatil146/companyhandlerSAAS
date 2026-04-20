@@ -7,9 +7,9 @@ import { Mail, Lock, ArrowRight, Loader2, ShieldCheck, AlertCircle, Users, Layou
 import { signInWithEmailAndPassword, fetchSignInMethodsForEmail, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '@/lib/firebase'; // Ya '../lib/firebase' agar error aaye
 import { useRouter } from 'next/navigation';
+import BookingModal from '@/app/components/modals/BookingModal';
 
 import { FloatingBookingWidget } from '@/app/components/FloatingBookingWidget';
-import { BookingModal } from '@/app/components/modals/BookingModal';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
@@ -78,7 +78,7 @@ export default function LoginPage() {
                 className="w-full max-w-md relative z-10"
             >
                 {/* Promo Banner */}
-                <motion.div 
+                <motion.div
                     initial={{ opacity: 0, y: -20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.8, type: "spring", stiffness: 200 }}
